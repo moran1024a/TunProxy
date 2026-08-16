@@ -1,13 +1,40 @@
+# CMake and compiler output
 /build/
-/dist/
+/build-*/
+/cmake-build-*/
 /obj-*/
+/CMakeFiles/
+/CMakeCache.txt
+/cmake_install.cmake
+/CTestTestfile.cmake
+/build.ninja
+/.ninja_deps
+/.ninja_log
+/compile_commands.json
+*.gcda
+*.gcno
+*.profraw
+
+# Debian package output
+/dist/
 /*.deb
+/*.ddeb
 /*.build
 /*.buildinfo
 /*.changes
-/.cache/
 /debian/.debhelper/
 /debian/tunproxy/
 /debian/debhelper-build-stamp
 /debian/files
-compile_commands.json
+/debian/*.debhelper.log
+/debian/*.substvars
+
+# Local tools and editors
+/.cache/
+/.agents/
+/.codex/
+/.idea/
+/.vscode/
+*.swp
+*~
+.DS_Store
