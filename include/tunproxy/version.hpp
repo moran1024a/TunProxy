@@ -4,6 +4,6 @@
 
 namespace tunproxy {
 
-inline constexpr std::string_view kTunProxyVersion = "0.1.1";
+inline constexpr std::string_view kTunProxyVersion = "0.1.2";
 
 } // namespace tunproxy

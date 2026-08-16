@@ -137,11 +137,13 @@ int main(int argc, char** argv) {
             return printError(tunproxy::makeError(
                 tunproxy::ErrorCode::InsufficientPrivileges, command + " requires root privileges"));
         }
+        tunproxy::emitLog(logger, tunproxy::LogLevel::Info, "Waiting for operation lock...");
         const auto lock = tunproxy::FileLock::acquire(paths.lock_file());
         if (!lock.ok()) {
             return printError(lock.error());
         }
-        tunproxy::ProxyManager manager(paths);
+        tunproxy::emitLog(logger, tunproxy::LogLevel::Info, "Operation lock acquired");
+        tunproxy::ProxyManager manager(paths, logger);
         if (command == "off") {
             const auto stopped = manager.stop();
             if (!stopped.ok()) {
