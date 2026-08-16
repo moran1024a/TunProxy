@@ -42,9 +42,14 @@ install(FILES README.md THIRD_PARTY_NOTICES.md LICENSE DESTINATION ${CMAKE_INSTA
 install(FILES docs/tunproxy.8 DESTINATION ${CMAKE_INSTALL_MANDIR}/man8)
 
 if(TUNPROXY_BUILD_TESTS)
+    set(THREADS_PREFER_PTHREAD_FLAG ON)
+    find_package(Threads REQUIRED)
     enable_testing()
     add_executable(tunproxy_tests tests/core_tests.cpp)
-    target_link_libraries(tunproxy_tests PRIVATE tunproxy_core)
+    target_link_libraries(tunproxy_tests PRIVATE tunproxy_core Threads::Threads)
     target_compile_features(tunproxy_tests PRIVATE cxx_std_17)
+    target_compile_options(tunproxy_tests PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-UNDEBUG>
+    )
     add_test(NAME tunproxy_tests COMMAND tunproxy_tests)
 endif()
