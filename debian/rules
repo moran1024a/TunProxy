@@ -1,0 +1,14 @@
+#!/usr/bin/make -f
+
+PACKAGE_OUTPUT ?= ..
+DEB_HOST_GNU_TYPE ?= $(shell dpkg-architecture -qDEB_HOST_GNU_TYPE)
+
+%:
+	dh $@ --buildsystem=cmake --builddirectory=obj-$(DEB_HOST_GNU_TYPE)
+
+override_dh_auto_configure:
+	dh_auto_configure -- -DTUNPROXY_BUILD_TESTS=ON -DTUNPROXY_STATIC_CXX_RUNTIME=ON
+
+override_dh_builddeb:
+	mkdir -p $(PACKAGE_OUTPUT)
+	dh_builddeb --destdir=$(PACKAGE_OUTPUT)

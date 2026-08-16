@@ -1,0 +1,37 @@
+#pragma once
+
+#include <cstdint>
+#include <string_view>
+
+namespace tunproxy {
+
+struct CoreReleaseManifest {
+    std::string_view version;
+    std::string_view revision;
+    std::string_view asset_name;
+    std::string_view download_url;
+    std::uintmax_t archive_size;
+    std::string_view archive_sha256;
+    std::string_view binary_member;
+    std::uintmax_t binary_size;
+    std::string_view binary_sha256;
+    std::string_view license_member;
+    std::string_view license_sha256;
+};
+
+inline constexpr CoreReleaseManifest kSingBoxRelease{
+    "1.13.18",
+    "45ca32dcb966f07f97fc888fe8586e359dbe8405",
+    "sing-box-1.13.18-linux-amd64.tar.gz",
+    "https://github.com/SagerNet/sing-box/releases/download/v1.13.18/"
+    "sing-box-1.13.18-linux-amd64.tar.gz",
+    23922330,
+    "d34d987ed6ae39ca3760269264fb502b867e5477db45518c829b07776245c495",
+    "sing-box-1.13.18-linux-amd64/sing-box",
+    58102016,
+    "8cb29c5b743fbda33502a2b6d49cf66ce13f5d1a41fcd0afc53fff17184ccf8e",
+    "sing-box-1.13.18-linux-amd64/LICENSE",
+    "650d5e3b99a446fb38e820fa87a49562e0c79eab868fff58618ac487a58e554c",
+};
+
+} // namespace tunproxy

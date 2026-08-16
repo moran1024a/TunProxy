@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-package:
+    runs-on: ubuntu-latest
+    container: ubuntu:20.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            build-essential cmake debhelper dpkg-dev
+      - name: Build and test
+        run: |
+          dpkg-buildpackage -b -us -uc
+          mkdir -p dist
+          cp ../tunproxy_*_amd64.deb dist/
+      - name: Check ABI baseline
+        run: |
+          max_glibc=$(readelf --version-info debian/tunproxy/usr/bin/tunproxy | grep -o 'GLIBC_[0-9.]*' | sort -V | tail -1)
+          test -z "$max_glibc" || dpkg --compare-versions "${max_glibc#GLIBC_}" le 2.31
+      - name: Lint package
+        run: |
+          apt-get install -y lintian
+          lintian --fail-on error dist/tunproxy_*_amd64.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tunproxy-amd64-deb
+          path: dist/tunproxy_*_amd64.deb
+
+  install-compatibility:
+    needs: build-package
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: tunproxy-amd64-deb
+          path: dist
+      - name: Install and smoke test
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ./dist/tunproxy_*_amd64.deb
+          tunproxy --version
+          tunproxy status
+          test -f /etc/tunproxy/config
+          sudo apt-get remove -y tunproxy

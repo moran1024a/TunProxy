@@ -1,0 +1,42 @@
+.TH TUNPROXY 8 "August 2026" "TunProxy 0.1.0" "System Administration"
+.SH NAME
+tunproxy \- manage a transparent TUN proxy through a pinned sing-box core
+.SH SYNOPSIS
+.B tunproxy
+.RI { on | off | status | setting }
+.RI [ socks5://host:port ]
+.SH DESCRIPTION
+.B tunproxy
+creates a system TUN interface and forwards TCP traffic to a configured SOCKS5
+upstream. It does not use shell proxy environment variables and does not manage
+proxy nodes or subscriptions.
+.SH COMMANDS
+.TP
+.B on
+Verify or repair the managed core, validate the upstream, and enable the TUN.
+Requires root privileges.
+.TP
+.B off
+Stop the managed core and remove its runtime state. Requires root privileges.
+.TP
+.B status
+Show the current state, upstream, managed core version, PID, and routing mode.
+.TP
+.B setting
+Show or update the SOCKS5 upstream. Requires root privileges.
+.SH FILES
+.TP
+.I /etc/tunproxy/config
+User configuration.
+.TP
+.I /var/lib/tunproxy/cores/1.13.18/sing-box
+Verified private sing-box executable.
+.TP
+.I /run/tunproxy/
+Runtime configuration, state, lock, and log files.
+.SH LIMITATIONS
+Version 0.1 proxies TCP traffic. DNS is sent through DNS-over-HTTPS via the
+SOCKS5 upstream. Other UDP traffic is rejected.
+.SH SEE ALSO
+.BR ip (8),
+.BR curl (1)

@@ -1,0 +1,14 @@
+Source: tunproxy
+Section: net
+Priority: optional
+Maintainer: TunProxy Maintainers <maintainers@tunproxy.invalid>
+Build-Depends: debhelper-compat (= 12), cmake (>= 3.16), g++
+Standards-Version: 4.5.0
+Rules-Requires-Root: no
+
+Package: tunproxy
+Architecture: amd64
+Depends: ${shlibs:Depends}, ${misc:Depends}, curl, ca-certificates
+Description: Minimal transparent TUN proxy controller
+ TunProxy manages a pinned private sing-box core and forwards Linux traffic to
+ a user-configured SOCKS5 upstream without shell proxy environment variables.

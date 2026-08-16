@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+
+install -d -m 0755 /etc/tunproxy
+install -d -m 0750 /var/lib/tunproxy/cores
+install -d -m 0700 /var/cache/tunproxy
+
+if [ -L /etc/tunproxy/config ]; then
+    echo "tunproxy: refusing to follow symlink /etc/tunproxy/config" >&2
+    exit 1
+fi
+if [ ! -e /etc/tunproxy/config ]; then
+    install -m 0644 /usr/share/tunproxy/config.default /etc/tunproxy/config
+fi
+
+#DEBHELPER#
+
+exit 0

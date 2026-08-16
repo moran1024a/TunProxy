@@ -1,0 +1,261 @@
+# TunProxy
+
+TunProxy 是一个面向 Linux 的透明代理控制器。它创建 TUN 接口，把本机 TCP 流量交给受控的 sing-box 内核，再通过用户指定的 SOCKS5 上游转发。
+
+TunProxy 不管理代理节点、订阅或路由规则，也不修改 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 等 shell 环境变量。上游可以是本机、WSL2 宿主机、局域网计算机、路由器或其他标准 SOCKS5 服务。
+
+## 特性
+
+- C++17 实现，命令行操作。
+- 固定版本的 sing-box 私有内核，首次启用时按 manifest 下载。
+- 下载、归档、二进制、版本、revision 和许可证完整校验。
+- SOCKS5 上游，支持 IPv4、域名和括号形式的 IPv6 地址。
+- TUN 全局透明代理和 DNS 劫持。
+- `auto_redirect` 失败时自动回退到普通 TUN 路由模式。
+- 原子配置写入、文件锁、PID 启动时间校验和安全停止。
+- 只发布 Debian 包，仓库不包含 sing-box 二进制。
+
+## 兼容性
+
+| 平台 | 状态 |
+| --- | --- |
+| Ubuntu 22.04 amd64 | 正式支持 |
+| Ubuntu 24.04 amd64 | 正式支持 |
+| Ubuntu 20.04 amd64 | 发布构建以 Ubuntu 20.04 作为 ABI 基线，随发布产物验证 |
+| WSL2 Linux amd64 | 支持，前提是内核提供 TUN 且进程拥有 `CAP_NET_ADMIN` |
+| ARM64 | 暂不支持 |
+| Fedora、Arch、macOS、Windows 原生 | 未承诺兼容 |
+
+运行 `tunproxy on` 需要 root 权限、可用的 `/dev/net/tun` 和网络管理能力。首次启用还需要访问 GitHub Releases，并依赖系统提供的 `curl`、CA 证书、`tar` 和 `sha256sum`。
+
+## 安装
+
+发行包是 amd64 Debian 包：
+
+```bash
+sudo apt install ./tunproxy_0.1.0_amd64.deb
+```
+
+deb 安装阶段不会联网下载 sing-box，也不会安装系统级 sing-box。第一次执行 `on` 时，TunProxy 才会下载并验证固定内核。
+
+### 目录和文件
+
+| 路径 | 来源 | 用途 |
+| --- | --- | --- |
+| `/usr/bin/tunproxy` | deb | CLI 可执行文件 |
+| `/usr/share/tunproxy/config.default` | deb | 首次安装时使用的默认配置 |
+| `/usr/share/man/man8/tunproxy.8.gz` | deb | man page |
+| `/usr/share/doc/tunproxy/` | deb | README、许可证和第三方许可信息 |
+| `/etc/tunproxy/config` | `postinst` | 用户 SOCKS5 上游配置，升级时不会覆盖 |
+| `/var/lib/tunproxy/cores/1.13.18/sing-box` | 首次 `on` | 固定并校验后的私有 sing-box 内核 |
+| `/var/lib/tunproxy/cores/1.13.18/LICENSE` | 首次 `on` | 与私有内核对应的上游许可证 |
+| `/var/cache/tunproxy/` | 运行时 | 内核下载临时文件，权限为 0700 |
+| `/run/tunproxy/sing-box.json` | 运行时 | 动态生成的 sing-box 配置 |
+| `/run/tunproxy/sing-box.log` | 运行时 | sing-box 日志 |
+| `/run/tunproxy/state` | 运行时 | PID、启动时间、核心路径和运行阶段 |
+| `/run/tunproxy/lock` | 运行时 | `on`、`off`、`setting` 操作锁 |
+
+`/dev/net/tun` 是系统提供的设备节点，不属于 TunProxy 安装内容。`tunproxy0` 是运行时创建的网络接口，核心停止后应自动消失。
+
+### 卸载
+
+保留用户配置、已下载核心和缓存，仅移除 deb 管理的程序、man page 和 `/usr/share` 文件：
+
+```bash
+sudo apt remove tunproxy
+```
+
+移除程序以及全部 TunProxy 配置、下载核心、缓存、日志和运行状态：
+
+```bash
+sudo apt purge tunproxy
+```
+
+卸载或升级前，`prerm` 会先执行 `tunproxy off`。如果核心无法安全停止，包管理操作会失败，不会继续删除状态文件。
+
+`apt remove` 后保留：
+
+```text
+/etc/tunproxy/
+/var/lib/tunproxy/
+/var/cache/tunproxy/
+/run/tunproxy/
+```
+
+`apt purge` 会删除上述四个目录及其中的全部内容。需要保留上游配置时，应在 purge 前备份 `/etc/tunproxy/config`。
+
+## 使用
+
+### 配置 SOCKS5 上游
+
+直接设置 URI：
+
+```bash
+sudo tunproxy setting socks5://127.0.0.1:10808
+sudo tunproxy setting socks5://172.28.32.1:10808
+sudo tunproxy setting socks5://192.168.1.20:7890
+sudo tunproxy setting socks5://[::1]:1080
+```
+
+不带参数时进入交互式设置：
+
+```bash
+sudo tunproxy setting
+```
+
+当前配置文件格式为：
+
+```ini
+protocol=socks5
+host=127.0.0.1
+port=10808
+```
+
+当前版本不支持 SOCKS5 用户名密码认证、HTTP CONNECT、多上游和代理节点配置。
+
+### 开启、关闭和查看状态
+
+```bash
+sudo tunproxy on
+tunproxy status
+sudo tunproxy off
+```
+
+典型输出：
+
+```text
+TunProxy: ON
+Upstream: socks5://192.168.1.20:7890
+Core: sing-box 1.13.18
+Mode: TUN
+Routing: auto-redirect
+```
+
+日志位于：
+
+```text
+/run/tunproxy/sing-box.log
+```
+
+`on`、`off` 和配置修改使用运行锁，重复执行不会并发修改状态。`status` 不需要 root，并会验证 PID、进程启动时间和 `/proc/<pid>/exe`，不只依赖状态文件中的 PID。
+
+## 源码编译
+
+构建环境建议使用 Ubuntu 22.04 或更高版本：
+
+```bash
+sudo apt update
+sudo apt install build-essential cmake ninja-build curl ca-certificates \
+    debhelper dpkg-dev lintian
+```
+
+编译并运行测试：
+
+```bash
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+生成 Debian 包：
+
+```bash
+DEB_RULES_REQUIRES_ROOT=no \
+  debian/rules binary PACKAGE_OUTPUT=dist
+lintian --fail-on error dist/tunproxy_0.1.0_amd64.deb
+```
+
+正式发布使用 Ubuntu 20.04 构建环境生成 amd64 包，以降低 glibc 最低版本要求；Ubuntu 22.04 和 24.04 在 CI 中执行安装 smoke test。
+
+## sing-box 内核
+
+当前锁定版本：
+
+```text
+Version:  1.13.18
+Revision: 45ca32dcb966f07f97fc888fe8586e359dbe8405
+Asset:    sing-box-1.13.18-linux-amd64.tar.gz
+```
+
+官方下载地址：
+
+```text
+https://github.com/SagerNet/sing-box/releases/download/v1.13.18/sing-box-1.13.18-linux-amd64.tar.gz
+```
+
+固定校验值：
+
+| 对象 | 大小 | SHA-256 |
+| --- | ---: | --- |
+| 归档 | 23922330 bytes | `d34d987ed6ae39ca3760269264fb502b867e5477db45518c829b07776245c495` |
+| `sing-box` | 58102016 bytes | `8cb29c5b743fbda33502a2b6d49cf66ce13f5d1a41fcd0afc53fff17184ccf8e` |
+| `LICENSE` | - | `650d5e3b99a446fb38e820fa87a49562e0c79eab868fff58618ac487a58e554c` |
+
+下载和安装流程：
+
+1. 仅允许 HTTPS，使用 `curl` 下载到受限缓存目录。
+2. 校验归档大小和 SHA-256。
+3. 使用 `tar` 只解出 manifest 指定的二进制和许可证成员。
+4. 校验二进制大小、SHA-256、版本输出和 revision。
+5. 校验上游许可证 SHA-256。
+6. 通过临时 staging 目录和 `rename()` 原子替换已安装文件。
+
+任何一步失败都不会执行未经校验的核心。已安装核心被删除、篡改或版本不匹配时，下一次 `tunproxy on` 会重新 repair。
+
+## 运行时技术实现
+
+TunProxy 由以下模块组成：
+
+```text
+ConfigManager       读取、校验和原子保存 SOCKS5 配置
+CoreManager         下载、校验、修复和替换 sing-box
+ProxyManager        生成配置并管理 TUN/核心生命周期
+RuntimeStateStore   保存 PID、启动时间、核心路径和运行阶段
+Process             fork/exec、输出捕获和超时控制
+Filesystem          原子文件写入、SHA-256 和安全目录创建
+```
+
+运行时生成 `/run/tunproxy/sing-box.json`，不会把 sing-box 原生 JSON 配置暴露给用户。当前配置包含：
+
+- `tunproxy0` TUN 入站，自动路由和严格路由。
+- SOCKS5 TCP 出站。
+- Cloudflare DNS-over-HTTPS，并通过 SOCKS5 detour 发送。
+- DNS 请求使用 `hijack-dns` 规则。
+- 非 DNS UDP 流量明确拒绝，避免在不确定上游 UDP 能力时产生旁路流量。
+
+进程启动采用已打开的核心文件描述符和 exec 握手。状态文件不仅保存 PID，还保存 `/proc/<pid>/stat` 的启动时间和可执行文件路径。停止时会重新验证这些身份信息，再发送 SIGTERM，超时后才发送 SIGKILL。
+
+## 安全边界
+
+- 不通过 shell 拼接和执行用户输入。
+- 下载 URL、版本、revision 和校验值全部由程序固定。
+- 配置和状态使用临时文件、`fsync()` 和 `rename()` 原子更新。
+- 运行目录逐级检查并拒绝符号链接和路径遍历。
+- 核心启动使用 `O_NOFOLLOW`、已打开文件描述符和 `fexecve()`。
+- `/var/cache/tunproxy` 使用 0700，核心目录不加入用户 `PATH`。
+- deb 安装阶段不联网，核心下载发生在显式 `tunproxy on` 操作中。
+
+## 限制
+
+- 首发目标是 amd64 Ubuntu，不提供 ARM64 和其他发行版的正式承诺。
+- 只支持 SOCKS5，不支持代理认证、HTTP CONNECT 或节点协议管理。
+- 首版重点是 TCP、DNS 和常见开发工具流量。
+- 非 DNS UDP 流量被拒绝，不适合作为游戏、VoIP 或完整 UDP 代理。
+- 不提供 systemd 常驻服务、GUI、订阅管理和自动更新 TunProxy 自身。
+
+## 目录结构
+
+```text
+include/tunproxy/   公共 C++ 接口和数据结构
+src/                核心实现和 CLI 入口
+tests/              单元、进程、配置和 sing-box repair 测试
+debian/             Debian 控制文件和维护脚本
+docs/               man page
+.github/workflows/  CI、兼容性 smoke test 和 release 流程
+```
+
+## 许可证
+
+TunProxy 使用 MIT License，见 [LICENSE](LICENSE)。
+
+TunProxy 下载的 sing-box 依据上游 GPLv3-or-later 及其许可证附加条款分发。固定版本、来源和第三方许可说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

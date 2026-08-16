@@ -1,0 +1,13 @@
+/build/
+/dist/
+/obj-*/
+/*.deb
+/*.build
+/*.buildinfo
+/*.changes
+/.cache/
+/debian/.debhelper/
+/debian/tunproxy/
+/debian/debhelper-build-stamp
+/debian/files
+compile_commands.json

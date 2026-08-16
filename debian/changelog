@@ -1,0 +1,7 @@
+tunproxy (0.1.0) unstable; urgency=medium
+
+  * Initial Debian package for the transparent TUN proxy controller.
+  * Pin and verify the sing-box 1.13.18 amd64 release at first use.
+  * Add root-safe runtime path handling and MIT licensing metadata.
+
+ -- TunProxy Maintainers <maintainers@tunproxy.invalid>  Sun, 16 Aug 2026 17:00:00 +0800
