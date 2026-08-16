@@ -121,9 +121,18 @@ tunproxy status
 sudo tunproxy off
 ```
 
+`on` 和 `off` 会实时输出阶段日志。首次启用时，如果 sing-box 不存在或校验失败，会显示原因、下载重试、curl 下载进度条、归档 SHA-256、二进制版本/revision 校验、配置检查、进程启动和 TUN 接口就绪状态；已安装且校验通过时会跳过下载并明确提示。连接上游失败、TUN 不可用或 sing-box 启动失败时，错误会立即输出，不会长时间无信息等待。
+
 典型输出：
 
 ```text
+[INFO] Starting TunProxy...
+[INFO] Checking SOCKS5 upstream socks5://192.168.1.20:7890...
+[INFO] Upstream connection succeeded via 192.168.1.20
+[INFO] sing-box 1.13.18 is installed and checksum verified
+[INFO] sing-box configuration is valid
+[INFO] sing-box process started (PID 1234)
+[INFO] TUN interface tunproxy0 is ready
 TunProxy: ON
 Upstream: socks5://192.168.1.20:7890
 Core: sing-box 1.13.18
@@ -131,7 +140,7 @@ Mode: TUN
 Routing: auto-redirect
 ```
 
-日志位于：
+进度条写入标准错误，阶段日志写入标准输出；脚本可以分别重定向两类输出。sing-box 自身运行日志仍位于：
 
 ```text
 /run/tunproxy/sing-box.log

@@ -14,10 +14,12 @@ proxy nodes or subscriptions.
 .TP
 .B on
 Verify or repair the managed core, validate the upstream, and enable the TUN.
-Requires root privileges.
+Requires root privileges. Progress and stage messages are printed while the
+core is downloaded, verified, started, and attached to the TUN interface.
 .TP
 .B off
 Stop the managed core and remove its runtime state. Requires root privileges.
+Stage messages identify the process termination and TUN interface cleanup.
 .TP
 .B status
 Show the current state, upstream, managed core version, PID, and routing mode.
@@ -34,6 +36,10 @@ Verified private sing-box executable.
 .TP
 .I /run/tunproxy/
 Runtime configuration, state, lock, and log files.
+.TP
+.I /var/cache/tunproxy/
+Temporary sing-box archives. The download progress bar is printed to standard
+error while an archive is being fetched.
 .SH LIMITATIONS
 Version 0.1 proxies TCP traffic. DNS is sent through DNS-over-HTTPS via the
 SOCKS5 upstream. Other UDP traffic is rejected.

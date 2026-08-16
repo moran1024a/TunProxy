@@ -2,6 +2,7 @@
 
 #include "tunproxy/config.hpp"
 #include "tunproxy/core_manager.hpp"
+#include "tunproxy/log.hpp"
 #include "tunproxy/paths.hpp"
 #include "tunproxy/result.hpp"
 #include "tunproxy/runtime_state.hpp"
@@ -22,7 +23,7 @@ struct ProxyStatus {
 
 class ProxyManager {
 public:
-    explicit ProxyManager(AppPaths paths = {});
+    explicit ProxyManager(AppPaths paths = {}, LogCallback logger = {});
 
     Result<ProxyStatus> start();
     Result<void> stop();
@@ -37,6 +38,7 @@ private:
     Result<bool> waitForTun(pid_t pid, std::chrono::milliseconds timeout) const;
 
     AppPaths paths_;
+    LogCallback logger_;
     ConfigManager config_;
     CoreManager core_;
     RuntimeStateStore state_;

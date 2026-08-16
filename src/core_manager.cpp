@@ -59,8 +59,8 @@ Result<void> renameReplacing(
 
 } // namespace
 
-CoreManager::CoreManager(AppPaths paths, CoreReleaseManifest manifest)
-    : paths_(std::move(paths)), manifest_(manifest) {}
+CoreManager::CoreManager(AppPaths paths, CoreReleaseManifest manifest, LogCallback logger)
+    : paths_(std::move(paths)), manifest_(manifest), logger_(std::move(logger)) {}
 
 std::filesystem::path CoreManager::coreDirectory() const {
     return paths_.data_dir / "cores" / std::string(manifest_.version);
@@ -121,12 +121,22 @@ Result<CoreInfo> CoreManager::verifyInstalledCore() const {
 Result<CoreInfo> CoreManager::ensureCore() {
     const auto installed = verifyInstalledCore();
     if (installed.ok()) {
+        emitLog(logger_, LogLevel::Info,
+            "sing-box " + std::string(manifest_.version) +
+            " is installed and checksum verified");
         return installed;
     }
+    emitLog(logger_, LogLevel::Warning,
+        "sing-box " + std::string(manifest_.version) +
+        " is missing or failed verification: " + installed.error().message);
+    emitLog(logger_, LogLevel::Info,
+        "Preparing to download and verify sing-box " + std::string(manifest_.version));
     return repairCore();
 }
 
 Result<CoreInfo> CoreManager::repairCore() {
+    emitLog(logger_, LogLevel::Info,
+        "sing-box archive: " + std::string(manifest_.asset_name));
     const auto cache_directory = ensureDirectory(paths_.cache_dir, 0700);
     if (!cache_directory.ok()) {
         return Result<CoreInfo>::failure(cache_directory.error());
@@ -162,13 +172,14 @@ Result<CoreInfo> CoreManager::repairCore() {
     Result<ProcessOutput> download = Result<ProcessOutput>::failure(
         makeError(ErrorCode::CoreDownloadFailure, "download not attempted"));
     for (int attempt = 0; attempt < 3; ++attempt) {
+        emitLog(logger_, LogLevel::Info,
+            "Downloading sing-box (attempt " + std::to_string(attempt + 1) + "/3)...");
         std::error_code ignored;
         std::filesystem::remove(archive, ignored);
         download = runCapture({
             paths_.curl_executable.string(),
             "--fail",
-            "--silent",
-            "--show-error",
+            "--progress-bar",
             "--location",
             "--proto",
             "=https",
@@ -180,11 +191,23 @@ Result<CoreInfo> CoreManager::repairCore() {
             "--output",
             archive.string(),
             std::string(manifest_.download_url),
-        }, std::chrono::seconds(620));
+        }, std::chrono::seconds(620), [this](ProcessStream stream, std::string_view chunk) {
+            if (stream == ProcessStream::Stderr) {
+                emitLog(logger_, LogLevel::Progress, std::string(chunk));
+            }
+        });
+        emitLog(logger_, LogLevel::Progress, "\n");
         if (download.ok() && download.value().exit_code == 0) {
+            emitLog(logger_, LogLevel::Info, "sing-box download completed");
             break;
         }
+        const std::string detail = download.ok()
+            ? download.value().stderr_text
+            : download.error().message;
+        emitLog(logger_, LogLevel::Warning,
+            "sing-box download attempt failed: " + detail);
         if (attempt < 2) {
+            emitLog(logger_, LogLevel::Info, "Retrying sing-box download in 1 second...");
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
     }
@@ -203,13 +226,18 @@ Result<CoreInfo> CoreManager::repairCore() {
             ErrorCode::CoreVerificationFailure,
             "sing-box archive size mismatch"));
     }
+    emitLog(logger_, LogLevel::Info,
+        "Downloaded archive size verified: " + std::to_string(archive_size.value()) + " bytes");
+    emitLog(logger_, LogLevel::Info, "Verifying sing-box archive SHA-256...");
     const auto archive_hash = sha256File(archive, paths_.sha256sum_executable);
     if (!archive_hash.ok() || archive_hash.value() != manifest_.archive_sha256) {
         return Result<CoreInfo>::failure(makeError(
             ErrorCode::CoreVerificationFailure,
             "sing-box archive checksum mismatch"));
     }
+    emitLog(logger_, LogLevel::Info, "sing-box archive SHA-256 verified");
 
+    emitLog(logger_, LogLevel::Info, "Extracting verified sing-box archive...");
     const auto extract = runCapture({
         paths_.tar_executable.string(),
         "--extract",
@@ -242,12 +270,14 @@ Result<CoreInfo> CoreManager::repairCore() {
     if (!verified.ok()) {
         return verified;
     }
+    emitLog(logger_, LogLevel::Info, "sing-box executable version and checksum verified");
     const auto license_hash = sha256File(staging / "LICENSE", paths_.sha256sum_executable);
     if (!license_hash.ok() || license_hash.value() != manifest_.license_sha256) {
         return Result<CoreInfo>::failure(makeError(
             ErrorCode::CoreVerificationFailure,
             "sing-box license checksum mismatch"));
     }
+    emitLog(logger_, LogLevel::Info, "sing-box license checksum verified");
 
     const auto installed_license = renameReplacing(staging / "LICENSE", coreDirectory() / "LICENSE");
     if (!installed_license.ok()) {
@@ -257,6 +287,8 @@ Result<CoreInfo> CoreManager::repairCore() {
     if (!installed.ok()) {
         return Result<CoreInfo>::failure(installed.error());
     }
+    emitLog(logger_, LogLevel::Info,
+        "sing-box " + std::string(manifest_.version) + " installed successfully");
     return verifyInstalledCore();
 }
 

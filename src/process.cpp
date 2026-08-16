@@ -56,7 +56,8 @@ std::string readAvailable(int fd) {
 
 Result<ProcessOutput> runCapture(
     const std::vector<std::string>& arguments,
-    std::chrono::milliseconds timeout) {
+    std::chrono::milliseconds timeout,
+    ProcessOutputCallback callback) {
     if (arguments.empty() || arguments.front().empty()) {
         return Result<ProcessOutput>::failure(
             makeError(ErrorCode::InvalidArguments, "empty process command"));
@@ -119,8 +120,18 @@ Result<ProcessOutput> runCapture(
     bool exited = false;
     int status = 0;
     while (std::chrono::steady_clock::now() < deadline) {
-        output.stdout_text += readAvailable(stdout_pipe.read);
-        output.stderr_text += readAvailable(stderr_pipe.read);
+        const std::string stdout_chunk = readAvailable(stdout_pipe.read);
+        const std::string stderr_chunk = readAvailable(stderr_pipe.read);
+        output.stdout_text += stdout_chunk;
+        output.stderr_text += stderr_chunk;
+        if (callback) {
+            if (!stdout_chunk.empty()) {
+                callback(ProcessStream::Stdout, stdout_chunk);
+            }
+            if (!stderr_chunk.empty()) {
+                callback(ProcessStream::Stderr, stderr_chunk);
+            }
+        }
         const pid_t waited = ::waitpid(child, &status, WNOHANG);
         if (waited == child) {
             exited = true;
@@ -145,8 +156,18 @@ Result<ProcessOutput> runCapture(
             makeError(ErrorCode::Generic, "process timed out"));
     }
 
-    output.stdout_text += readAvailable(stdout_pipe.read);
-    output.stderr_text += readAvailable(stderr_pipe.read);
+    const std::string stdout_chunk = readAvailable(stdout_pipe.read);
+    const std::string stderr_chunk = readAvailable(stderr_pipe.read);
+    output.stdout_text += stdout_chunk;
+    output.stderr_text += stderr_chunk;
+    if (callback) {
+        if (!stdout_chunk.empty()) {
+            callback(ProcessStream::Stdout, stdout_chunk);
+        }
+        if (!stderr_chunk.empty()) {
+            callback(ProcessStream::Stderr, stderr_chunk);
+        }
+    }
     closeFd(stdout_pipe.read);
     closeFd(stderr_pipe.read);
 

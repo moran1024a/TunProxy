@@ -1,4 +1,5 @@
 #include "tunproxy/config.hpp"
+#include "tunproxy/log.hpp"
 #include "tunproxy/proxy_manager.hpp"
 #include "tunproxy/result.hpp"
 #include "tunproxy/runtime_state.hpp"
@@ -40,6 +41,15 @@ int main(int argc, char** argv) {
     }
     tunproxy::AppPaths paths;
     tunproxy::ConfigManager config;
+    const tunproxy::LogCallback logger = [](tunproxy::LogLevel level, std::string_view message) {
+        if (level == tunproxy::LogLevel::Progress) {
+            std::cerr << message << std::flush;
+            return;
+        }
+        std::ostream& output = level == tunproxy::LogLevel::Warning ? std::cerr : std::cout;
+        output << (level == tunproxy::LogLevel::Warning ? "[WARN] " : "[INFO] ")
+               << message << '\n' << std::flush;
+    };
     if (command == "setting") {
         if (::geteuid() != 0) {
             return printError(tunproxy::makeError(
@@ -101,7 +111,7 @@ int main(int argc, char** argv) {
             printUsage();
             return static_cast<int>(tunproxy::ErrorCode::InvalidArguments);
         }
-        tunproxy::ProxyManager manager(paths);
+        tunproxy::ProxyManager manager(paths, logger);
         const auto status = manager.status();
         if (!status.ok()) {
             return printError(status.error());

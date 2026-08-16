@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tunproxy/core_manifest.hpp"
+#include "tunproxy/log.hpp"
 #include "tunproxy/paths.hpp"
 #include "tunproxy/result.hpp"
 
@@ -19,7 +20,8 @@ class CoreManager {
 public:
     explicit CoreManager(
         AppPaths paths = {},
-        CoreReleaseManifest manifest = kSingBoxRelease);
+        CoreReleaseManifest manifest = kSingBoxRelease,
+        LogCallback logger = {});
 
     Result<CoreInfo> ensureCore();
     Result<CoreInfo> verifyInstalledCore() const;
@@ -33,6 +35,7 @@ private:
 
     AppPaths paths_;
     CoreReleaseManifest manifest_;
+    LogCallback logger_;
 };
 
 } // namespace tunproxy

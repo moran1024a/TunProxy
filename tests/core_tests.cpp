@@ -94,10 +94,19 @@ int main() {
         }
     }
 
-    const auto process = runCapture({"/usr/bin/printf", "%s", "process-ok"}, std::chrono::seconds(1));
+    std::string observed_process_output;
+    const auto process = runCapture(
+        {"/usr/bin/printf", "%s", "process-ok"},
+        std::chrono::seconds(1),
+        [&observed_process_output](ProcessStream stream, std::string_view chunk) {
+            if (stream == ProcessStream::Stdout) {
+                observed_process_output.append(chunk);
+            }
+        });
     assert(process.ok());
     assert(process.value().exit_code == 0);
     assert(process.value().stdout_text == "process-ok");
+    assert(observed_process_output == "process-ok");
 
     const int server = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
     if (server >= 0) {
@@ -235,11 +244,23 @@ int main() {
         license_member,
         license_hash.value(),
     };
-    CoreManager repair_manager(repair_paths, repair_manifest);
+    std::string repair_log;
+    CoreManager repair_manager(
+        repair_paths,
+        repair_manifest,
+        [&repair_log](LogLevel level, std::string_view message) {
+            if (level != LogLevel::Progress) {
+                repair_log.append(message);
+                repair_log.push_back('\n');
+            }
+        });
     const auto repaired_core = repair_manager.repairCore();
     assert(repaired_core.ok());
     assert(std::filesystem::exists(repair_manager.corePath()));
     assert(std::filesystem::exists(repair_manager.coreDirectory() / "LICENSE"));
+    assert(repair_log.find("sing-box download completed") != std::string::npos);
+    assert(repair_log.find("sing-box archive SHA-256 verified") != std::string::npos);
+    assert(repair_log.find("installed successfully") != std::string::npos);
 
     std::filesystem::remove_all(root, error);
 
