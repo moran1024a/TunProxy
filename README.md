@@ -33,7 +33,7 @@ TunProxy 不管理代理节点、订阅或路由规则，也不修改 `HTTP_PROX
 发行包是 amd64 Debian 包：
 
 ```bash
-sudo apt install ./tunproxy_0.1.0_amd64.deb
+sudo apt install ./tunproxy_0.1.1_amd64.deb
 ```
 
 deb 安装阶段不会联网下载 sing-box，也不会安装系统级 sing-box。第一次执行 `on` 时，TunProxy 才会下载并验证固定内核。
@@ -171,7 +171,7 @@ ctest --test-dir build --output-on-failure
 ```bash
 DEB_RULES_REQUIRES_ROOT=no \
   debian/rules binary PACKAGE_OUTPUT=dist
-lintian --fail-on error dist/tunproxy_0.1.0_amd64.deb
+lintian --fail-on error dist/tunproxy_0.1.1_amd64.deb
 ```
 
 正式发布使用 Ubuntu 20.04 构建环境生成 amd64 包，以降低 glibc 最低版本要求；Ubuntu 22.04 和 24.04 在 CI 中执行安装 smoke test。

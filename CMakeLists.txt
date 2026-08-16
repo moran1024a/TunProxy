@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(tunproxy VERSION 0.1.0 LANGUAGES CXX)
+project(tunproxy VERSION 0.1.1 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 
