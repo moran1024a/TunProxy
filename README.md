@@ -35,8 +35,8 @@ TunProxy 不管理代理节点、订阅或路由规则，也不修改 `HTTP_PROX
 下载与系统架构匹配的 amd64 deb，并核对发布说明中给出的 SHA-256：
 
 ```bash
-sha256sum ./tunproxy_0.3.0~rc1_amd64.deb
-sudo apt install ./tunproxy_0.3.0~rc1_amd64.deb
+sha256sum ./tunproxy_0.3.0.rc1_amd64.deb
+sudo apt install ./tunproxy_0.3.0.rc1_amd64.deb
 ```
 
 推荐使用 `apt install` 安装本地包，以便同时处理依赖。文件名前的 `./` 不能省略；从其他目录安装时应使用 deb 的绝对路径。
@@ -56,8 +56,8 @@ tunproxy status
 无需卸载旧版本，也不要在更新前执行 `apt remove` 或 `apt purge`。下载新版本 deb、核对 SHA-256，然后直接覆盖安装：
 
 ```bash
-sha256sum ./tunproxy_0.3.0~rc1_amd64.deb
-sudo apt install ./tunproxy_0.3.0~rc1_amd64.deb
+sha256sum ./tunproxy_0.3.0.rc1_amd64.deb
+sudo apt install ./tunproxy_0.3.0.rc1_amd64.deb
 tunproxy --version
 tunproxy status
 ```
@@ -81,7 +81,7 @@ tunproxy on
 更新期间网络代理会短暂中断。如果旧实例不能安全停止，包管理操作会失败并保留持久配置与核心，不会继续进行不完整替换。重复安装相同版本用于修复本地安装时，可以执行：
 
 ```bash
-sudo apt install --reinstall ./tunproxy_0.3.0~rc1_amd64.deb
+sudo apt install --reinstall ./tunproxy_0.3.0.rc1_amd64.deb
 ```
 
 不支持通过直接安装较低版本进行配置降级。确需回退时，应先备份 `/etc/tunproxy/config`，并按目标版本的发布说明处理兼容性。
@@ -263,7 +263,7 @@ ctest --test-dir build --output-on-failure
 
 ```bash
 dpkg-buildpackage -b -us -uc
-lintian --fail-on error ../tunproxy_0.3.0~rc1_amd64.deb
+lintian --fail-on error ../tunproxy_0.3.0.rc1_amd64.deb
 ```
 
 正式发布使用 Ubuntu 22.04 构建 amd64 包。发布前应在 Ubuntu 22.04 和 24.04 上执行全新安装、覆盖更新、卸载和 TUN 往返测试。仓库不使用 GitHub Actions，构建与发布均在本地完成。
