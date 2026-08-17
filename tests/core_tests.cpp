@@ -39,16 +39,18 @@ int main() {
     assert(!canonicalizeCidr("192.168.1.1/33").ok());
     assert(addressHostCidr("192.0.2.10").value() == "192.0.2.10/32");
     assert(addressHostCidr("2001:db8::1").value() == "2001:db8::1/128");
+    assert(!addressHostCidr("0.0.0.0").ok());
+    assert(!addressHostCidr("::").ok());
     const BypassPolicy normalized_policy{
         {"10.0.0.0/8"},
-        {"10.1.2.3/32", "192.0.2.0/24"},
+        {"10.1.2.3/32", "192.0.2.44/32"},
         "10.9.8.7/32",
     };
     const auto normalized_cidrs = normalized_policy.allCidrs();
     assert(normalized_cidrs.size() == 3);
     assert(normalized_cidrs[0] == "10.9.8.7/32");
     assert(normalized_cidrs[1] == "10.0.0.0/8");
-    assert(normalized_cidrs[2] == "192.0.2.0/24");
+    assert(normalized_cidrs[2] == "192.0.2.44/32");
     const auto bypass_policy = collectBypassPolicy("192.0.2.10");
     if (!bypass_policy.ok()) {
         if (bypass_policy.error().message.find("Operation not permitted") == std::string::npos) {
@@ -57,6 +59,12 @@ int main() {
         assert(bypass_policy.error().message.find("Operation not permitted") != std::string::npos);
     } else {
         assert(bypass_policy.value().upstream_cidr == "192.0.2.10/32");
+        for (const auto& cidr : bypass_policy.value().interface_cidrs) {
+            assert(canonicalizeCidr(cidr).value() == cidr);
+            assert(cidr.find(':') == std::string::npos
+                ? cidr.size() >= 3 && cidr.compare(cidr.size() - 3, 3, "/32") == 0
+                : cidr.size() >= 4 && cidr.compare(cidr.size() - 4, 4, "/128") == 0);
+        }
         const auto bypass_cidrs = bypass_policy.value().allCidrs();
         assert(!bypass_cidrs.empty());
         assert(bypass_cidrs.front() == "192.0.2.10/32");

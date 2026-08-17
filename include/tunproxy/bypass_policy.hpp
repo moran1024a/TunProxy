@@ -10,7 +10,7 @@ namespace tunproxy {
 
 struct BypassPolicy {
     std::vector<std::string> fixed_cidrs;
-    std::vector<std::string> detected_cidrs;
+    std::vector<std::string> interface_cidrs;
     std::string upstream_cidr;
 
     std::vector<std::string> allCidrs() const;

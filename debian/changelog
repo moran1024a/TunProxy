@@ -1,3 +1,11 @@
+tunproxy (0.3.0~rc2) unstable; urgency=medium
+
+  * Stop importing arbitrary non-default unicast routes into the bypass policy.
+  * Limit dynamic bypass entries to active interface host addresses.
+  * Reject unspecified interface and upstream addresses.
+
+ -- TunProxy Maintainers <maintainers@tunproxy.invalid>  Mon, 17 Aug 2026 20:00:00 +0800
+
 tunproxy (0.3.0~rc1) unstable; urgency=medium
 
   * Always bypass local, private, link-local, multicast, and broadcast ranges.

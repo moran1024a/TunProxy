@@ -12,7 +12,7 @@ TunProxy 不管理代理节点、订阅或路由规则，也不修改 `HTTP_PROX
 - 下载、归档、二进制、版本、revision 和许可证完整校验。
 - SOCKS5 上游，支持 IPv4、域名和括号形式的 IPv6 地址。
 - TUN 全局透明代理和 DNS 劫持。
-- 固定启用内网保护策略，绕过本机、私有、链路本地、组播、广播及已有非默认路由。
+- 固定启用内网保护策略，绕过固定本地范围、实际 SOCKS5 上游和启用接口的自身地址。
 - 强制绕过实际连接的 SOCKS5 上游地址，避免上游连接被 TUN 再次捕获。
 - `auto_redirect` 失败时自动回退到普通 TUN 路由模式。
 - 原子配置写入、文件锁、PID 启动时间校验和安全停止。
@@ -35,8 +35,8 @@ TunProxy 不管理代理节点、订阅或路由规则，也不修改 `HTTP_PROX
 下载与系统架构匹配的 amd64 deb，并核对发布说明中给出的 SHA-256：
 
 ```bash
-sha256sum ./tunproxy_0.3.0.rc1_amd64.deb
-sudo apt install ./tunproxy_0.3.0.rc1_amd64.deb
+sha256sum ./tunproxy_0.3.0.rc2_amd64.deb
+sudo apt install ./tunproxy_0.3.0.rc2_amd64.deb
 ```
 
 推荐使用 `apt install` 安装本地包，以便同时处理依赖。文件名前的 `./` 不能省略；从其他目录安装时应使用 deb 的绝对路径。
@@ -56,8 +56,8 @@ tunproxy status
 无需卸载旧版本，也不要在更新前执行 `apt remove` 或 `apt purge`。下载新版本 deb、核对 SHA-256，然后直接覆盖安装：
 
 ```bash
-sha256sum ./tunproxy_0.3.0.rc1_amd64.deb
-sudo apt install ./tunproxy_0.3.0.rc1_amd64.deb
+sha256sum ./tunproxy_0.3.0.rc2_amd64.deb
+sudo apt install ./tunproxy_0.3.0.rc2_amd64.deb
 tunproxy --version
 tunproxy status
 ```
@@ -81,7 +81,7 @@ tunproxy on
 更新期间网络代理会短暂中断。如果旧实例不能安全停止，包管理操作会失败并保留持久配置与核心，不会继续进行不完整替换。重复安装相同版本用于修复本地安装时，可以执行：
 
 ```bash
-sudo apt install --reinstall ./tunproxy_0.3.0.rc1_amd64.deb
+sudo apt install --reinstall ./tunproxy_0.3.0.rc2_amd64.deb
 ```
 
 不支持通过直接安装较低版本进行配置降级。确需回退时，应先备份 `/etc/tunproxy/config`，并按目标版本的发布说明处理兼容性。
@@ -191,7 +191,7 @@ Upstream: socks5://192.168.1.20:7890
 Core: sing-box 1.13.18
 Mode: TUN
 Routing: auto-redirect
-Bypass: fixed internal policy (14 effective CIDRs)
+Bypass: fixed + upstream host + interface hosts (13 effective CIDRs)
 Upstream bypass: 192.168.1.20
 ```
 
@@ -230,9 +230,9 @@ ff00::/8
 255.255.255.255/32
 ```
 
-每次执行 `on` 还会通过 rtnetlink 读取现有 IPv4/IPv6 非默认单播路由，并读取接口自身地址。CIDR 会被规范化、去重并写入本次运行状态；如果检测结果超过安全上限，启动会明确失败，不会静默套用不完整策略。TunProxy 使用的 `198.18.0.0/15` TUN 地址空间不会从本地路由自动加入绕过范围。SOCKS5 域名实际选中并成功连接的 IPv4 `/32` 或 IPv6 `/128` 地址始终优先直连。
+每次执行 `on` 还会通过 `getifaddrs()` 读取处于启用状态的接口地址。接口 IPv4 只会加入对应 `/32`，IPv6 只会加入对应 `/128`；未指定地址和 `tunproxy0` 会被忽略。CIDR 会被规范化、去重并写入本次运行状态，如果接口地址数量超过安全上限，启动会明确失败。TunProxy 不读取或绕过任意内核路由，因此分割默认路由、VPN 公网路由和自定义策略路由不会扩大绕过范围。SOCKS5 域名实际选中并成功连接的 IPv4 `/32` 或 IPv6 `/128` 地址始终优先直连。
 
-规则顺序固定为：上游地址直连，本机和内网范围直连，其他 DNS 劫持，其他 UDP 拒绝，剩余 TCP 通过 SOCKS5。由此，局域网 DNS、mDNS、SSDP 和其他命中绕过范围的 UDP 通信保持直连；发往公网且未命中绕过范围的非 DNS UDP 仍会被拒绝。
+规则顺序固定为：上游地址直连，固定范围和接口自身地址直连，其他 DNS 劫持，其他 UDP 拒绝，剩余 TCP 通过 SOCKS5。由此，局域网 DNS、mDNS、SSDP 和其他命中固定范围的 UDP 通信保持直连；发往公网且未命中绕过范围的非 DNS UDP 仍会被拒绝。
 
 正常使用不需要 `sudo`。systemd 或控制 Socket 损坏时，管理员可以使用 root-only 恢复入口：
 
@@ -263,7 +263,7 @@ ctest --test-dir build --output-on-failure
 
 ```bash
 dpkg-buildpackage -b -us -uc
-lintian --fail-on error ../tunproxy_0.3.0.rc1_amd64.deb
+lintian --fail-on error '../tunproxy_0.3.0~rc2_amd64.deb'
 ```
 
 正式发布使用 Ubuntu 22.04 构建 amd64 包。发布前应在 Ubuntu 22.04 和 24.04 上执行全新安装、覆盖更新、卸载和 TUN 往返测试。仓库不使用 GitHub Actions，构建与发布均在本地完成。
@@ -309,7 +309,7 @@ TunProxy 由以下模块组成：
 
 ```text
 ConfigManager       读取、校验和原子保存 SOCKS5 配置
-BypassPolicy        规范化 CIDR，通过 getifaddrs/rtnetlink 生成固定绕过策略
+BypassPolicy        规范化 CIDR，通过 getifaddrs 生成受限绕过策略
 CommandController   统一执行本地恢复和 daemon 控制命令
 CoreManager         下载、校验、修复和替换 sing-box
 IPC                  分帧、限长的 Unix Socket 请求与事件流
@@ -324,7 +324,7 @@ Filesystem          原子文件写入、SHA-256 和安全目录创建
 - `tunproxy0` TUN 入站，自动路由和严格路由。
 - TUN `route_exclude_address` 与 direct 规则共享同一份已锁定绕过 CIDR。
 - SOCKS5 TCP 出站。
-- direct 出站仅用于固定内网策略、检测到的已有路由和实际 SOCKS5 上游地址。
+- direct 出站仅用于固定范围、启用接口的自身地址和实际 SOCKS5 上游地址。
 - Cloudflare DNS-over-HTTPS，并通过 SOCKS5 detour 发送。
 - DNS 请求使用 `hijack-dns` 规则。
 - 未命中绕过策略的非 DNS UDP 流量明确拒绝，避免在不确定上游 UDP 能力时产生旁路流量。

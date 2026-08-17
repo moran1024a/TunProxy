@@ -303,7 +303,7 @@ Result<ProxyStatus> ProxyManager::start() {
     }
     emitLog(logger_, LogLevel::Info,
         "Upstream connection succeeded via " + resolved.value().address);
-    emitLog(logger_, LogLevel::Info, "Detecting local addresses and existing routes...");
+    emitLog(logger_, LogLevel::Info, "Detecting active interface host addresses...");
     const auto bypass = collectBypassPolicy(resolved.value().address);
     if (!bypass.ok()) {
         return Result<ProxyStatus>::failure(bypass.error());
@@ -311,7 +311,8 @@ Result<ProxyStatus> ProxyManager::start() {
     const auto bypass_cidrs = bypass.value().allCidrs();
     emitLog(logger_, LogLevel::Info,
         "Bypass policy ready: " + std::to_string(bypass_cidrs.size()) +
-        " CIDRs, upstream pinned as " + bypass.value().upstream_cidr);
+        " effective CIDRs, " + std::to_string(bypass.value().interface_cidrs.size()) +
+        " additional interface hosts, upstream pinned as " + bypass.value().upstream_cidr);
     const auto core = core_.ensureCore();
     if (!core.ok()) {
         return Result<ProxyStatus>::failure(core.error());

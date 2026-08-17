@@ -31,13 +31,13 @@ Result<std::string> CommandController::execute(
             output << "Core: sing-box " << status.value().core_version << '\n'
                    << "PID: " << status.value().pid << '\n'
                    << "Routing: " << status.value().routing_mode << '\n'
-                   << "Bypass: fixed internal policy (" << status.value().bypass_cidrs.size()
+                   << "Bypass: fixed + upstream host + interface hosts (" << status.value().bypass_cidrs.size()
                    << " effective CIDRs)\n";
             if (!status.value().upstream_address.empty()) {
                 output << "Upstream bypass: " << status.value().upstream_address << '\n';
             }
         } else {
-            output << "Bypass: fixed internal policy (applied on next on)\n";
+            output << "Bypass: fixed + upstream host + interface hosts (applied on next on)\n";
         }
         return Result<std::string>::success(output.str());
     }
@@ -76,7 +76,7 @@ Result<std::string> CommandController::execute(
         }
         output << "Routing order:\n"
                << "  1. Selected SOCKS5 upstream address -> direct\n"
-               << "  2. Local, private, link-local and detected routes -> direct\n"
+               << "  2. Fixed ranges and active interface host addresses -> direct\n"
                << "  3. Other DNS traffic -> hijack-dns\n"
                << "  4. Other UDP traffic -> reject\n"
                << "  5. Other traffic -> SOCKS5\n";
@@ -140,7 +140,7 @@ Result<std::string> CommandController::execute(
                << "Core: sing-box " << started.value().core_version << '\n'
                << "Mode: TUN\n"
                << "Routing: " << started.value().routing_mode << '\n'
-               << "Bypass: fixed internal policy (" << started.value().bypass_cidrs.size()
+               << "Bypass: fixed + upstream host + interface hosts (" << started.value().bypass_cidrs.size()
                << " effective CIDRs)\n"
                << "Upstream bypass: " << started.value().upstream_address << '\n';
         return Result<std::string>::success(output.str());

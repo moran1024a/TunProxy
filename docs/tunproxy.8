@@ -1,4 +1,4 @@
-.TH TUNPROXY 8 "August 2026" "TunProxy 0.3.0-rc.1" "System Administration"
+.TH TUNPROXY 8 "August 2026" "TunProxy 0.3.0-rc.2" "System Administration"
 .SH NAME
 tunproxy \- manage a transparent TUN proxy through a pinned sing-box core
 .SH SYNOPSIS
@@ -92,10 +92,9 @@ non-DNS UDP traffic is rejected.
 .SH BYPASS POLICY
 The bypass policy always excludes loopback, private, carrier-grade NAT,
 link-local, unique-local, multicast, and broadcast ranges. Before enabling the
-TUN, TunProxy also reads interface addresses and existing non-default IPv4 and
-IPv6 routes through rtnetlink. The IP address selected for the SOCKS5 upstream
-is always added as a direct host route. The TUN address space 198.18.0.0/15 is
-not imported from detected routes.
+TUN, TunProxy adds host routes only for addresses assigned to active interfaces.
+The IP address selected for the SOCKS5 upstream is always added as a direct host
+route. Arbitrary kernel routes are not imported into the bypass policy.
 .SH SEE ALSO
 .BR apt (8),
 .BR systemctl (1),

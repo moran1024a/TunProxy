@@ -2,10 +2,7 @@
 
 #include <arpa/inet.h>
 #include <ifaddrs.h>
-#include <linux/netlink.h>
-#include <linux/rtnetlink.h>
-#include <sys/socket.h>
-#include <unistd.h>
+#include <net/if.h>
 
 #include <algorithm>
 #include <array>
@@ -17,7 +14,7 @@
 namespace tunproxy {
 namespace {
 
-constexpr std::size_t kMaximumDetectedCidrs = 1024;
+constexpr std::size_t kMaximumInterfaceCidrs = 1024;
 
 struct BinaryCidr {
     int family{AF_UNSPEC};
@@ -110,9 +107,16 @@ bool containsCidr(const BinaryCidr& outer, const BinaryCidr& inner) {
     return true;
 }
 
-Result<void> appendDetected(
+bool isUnspecifiedAddress(const BinaryCidr& cidr) {
+    const std::size_t bytes = cidr.family == AF_INET ? 4U : 16U;
+    return std::all_of(cidr.address.begin(),
+        cidr.address.begin() + static_cast<std::ptrdiff_t>(bytes),
+        [](unsigned char value) { return value == 0U; });
+}
+
+Result<void> appendInterfaceAddress(
     std::vector<std::string>& output, std::set<std::string>& seen, const BinaryCidr& cidr) {
-    if (overlapsTunAddressSpace(cidr)) {
+    if (isUnspecifiedAddress(cidr) || overlapsTunAddressSpace(cidr)) {
         return Result<void>::success();
     }
     const std::string formatted = formatCidr(cidr);
@@ -127,10 +131,10 @@ Result<void> appendDetected(
         }
     }
     if (seen.insert(formatted).second) {
-        if (output.size() >= kMaximumDetectedCidrs) {
+        if (output.size() >= kMaximumInterfaceCidrs) {
             return Result<void>::failure(makeError(
                 ErrorCode::StateError,
-                "more than 1024 local addresses or routes were detected; refusing an incomplete bypass policy"));
+                "more than 1024 active interface addresses were detected; refusing an incomplete bypass policy"));
         }
         output.push_back(formatted);
     }
@@ -146,7 +150,9 @@ Result<void> collectInterfaceAddresses(
             "cannot enumerate local interface addresses: " + std::string(std::strerror(errno))));
     }
     for (const ifaddrs* current = raw_interfaces; current != nullptr; current = current->ifa_next) {
-        if (current->ifa_addr == nullptr ||
+        if (current->ifa_addr == nullptr || current->ifa_name == nullptr ||
+            (current->ifa_flags & IFF_UP) == 0U ||
+            std::string_view(current->ifa_name) == "tunproxy0" ||
             (current->ifa_addr->sa_family != AF_INET && current->ifa_addr->sa_family != AF_INET6)) {
             continue;
         }
@@ -157,120 +163,13 @@ Result<void> collectInterfaceAddresses(
             ? static_cast<const void*>(&reinterpret_cast<const sockaddr_in*>(current->ifa_addr)->sin_addr)
             : static_cast<const void*>(&reinterpret_cast<const sockaddr_in6*>(current->ifa_addr)->sin6_addr);
         std::memcpy(cidr.address.data(), source, cidr.family == AF_INET ? 4U : 16U);
-        const auto appended = appendDetected(output, seen, cidr);
+        const auto appended = appendInterfaceAddress(output, seen, cidr);
         if (!appended.ok()) {
             ::freeifaddrs(raw_interfaces);
             return appended;
         }
     }
     ::freeifaddrs(raw_interfaces);
-    return Result<void>::success();
-}
-
-Result<void> collectKernelRoutes(
-    std::vector<std::string>& output, std::set<std::string>& seen) {
-    const int descriptor = ::socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE);
-    if (descriptor < 0) {
-        return Result<void>::failure(makeError(
-            ErrorCode::StateError,
-            "cannot open rtnetlink route socket: " + std::string(std::strerror(errno))));
-    }
-    sockaddr_nl local{};
-    local.nl_family = AF_NETLINK;
-    if (::bind(descriptor, reinterpret_cast<const sockaddr*>(&local), sizeof(local)) != 0) {
-        const std::string detail = std::strerror(errno);
-        (void)::close(descriptor);
-        return Result<void>::failure(makeError(
-            ErrorCode::StateError, "cannot bind rtnetlink route socket: " + detail));
-    }
-
-    struct RouteRequest {
-        nlmsghdr header;
-        rtmsg route;
-    } request{};
-    request.header.nlmsg_len = NLMSG_LENGTH(sizeof(rtmsg));
-    request.header.nlmsg_type = RTM_GETROUTE;
-    request.header.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
-    request.header.nlmsg_seq = 1;
-    request.route.rtm_family = AF_UNSPEC;
-    if (::send(descriptor, &request, request.header.nlmsg_len, 0) < 0) {
-        const std::string detail = std::strerror(errno);
-        (void)::close(descriptor);
-        return Result<void>::failure(makeError(
-            ErrorCode::StateError, "cannot request kernel routes: " + detail));
-    }
-
-    std::array<char, 64U * 1024U> buffer{};
-    bool complete = false;
-    while (!complete) {
-        const ssize_t received = ::recv(descriptor, buffer.data(), buffer.size(), 0);
-        if (received < 0 && errno == EINTR) {
-            continue;
-        }
-        if (received <= 0) {
-            const std::string detail = received == 0 ? "unexpected end of response" : std::strerror(errno);
-            (void)::close(descriptor);
-            return Result<void>::failure(makeError(
-                ErrorCode::StateError, "cannot read kernel routes: " + detail));
-        }
-        int remaining = static_cast<int>(received);
-        for (nlmsghdr* message = reinterpret_cast<nlmsghdr*>(buffer.data());
-             NLMSG_OK(message, remaining); message = NLMSG_NEXT(message, remaining)) {
-            if (message->nlmsg_seq != request.header.nlmsg_seq) {
-                continue;
-            }
-            if (message->nlmsg_type == NLMSG_DONE) {
-                complete = true;
-                break;
-            }
-            if (message->nlmsg_type == NLMSG_ERROR) {
-                const auto* error = reinterpret_cast<const nlmsgerr*>(NLMSG_DATA(message));
-                (void)::close(descriptor);
-                return Result<void>::failure(makeError(
-                    ErrorCode::StateError,
-                    error->error == 0 ? "incomplete rtnetlink route response" :
-                        "kernel rejected route enumeration: " +
-                            std::string(std::strerror(-error->error))));
-            }
-            if (message->nlmsg_type != RTM_NEWROUTE) {
-                continue;
-            }
-            const auto* route = reinterpret_cast<const rtmsg*>(NLMSG_DATA(message));
-            if ((route->rtm_family != AF_INET && route->rtm_family != AF_INET6) ||
-                route->rtm_dst_len == 0 || route->rtm_type != RTN_UNICAST) {
-                continue;
-            }
-            BinaryCidr cidr;
-            cidr.family = route->rtm_family;
-            cidr.prefix = route->rtm_dst_len;
-            bool has_destination = false;
-            int attributes_length = static_cast<int>(RTM_PAYLOAD(message));
-            for (rtattr* attribute = RTM_RTA(route); RTA_OK(attribute, attributes_length);
-                 attribute = RTA_NEXT(attribute, attributes_length)) {
-                if (attribute->rta_type == RTA_DST) {
-                    const std::size_t expected = cidr.family == AF_INET ? 4U : 16U;
-                    if (static_cast<std::size_t>(RTA_PAYLOAD(attribute)) >= expected) {
-                        std::memcpy(cidr.address.data(), RTA_DATA(attribute), expected);
-                        has_destination = true;
-                    }
-                }
-            }
-            if (!has_destination) {
-                continue;
-            }
-            const auto canonical = parseCidr(formatCidr(cidr));
-            if (!canonical.ok()) {
-                (void)::close(descriptor);
-                return Result<void>::failure(canonical.error());
-            }
-            const auto appended = appendDetected(output, seen, canonical.value());
-            if (!appended.ok()) {
-                (void)::close(descriptor);
-                return appended;
-            }
-        }
-    }
-    (void)::close(descriptor);
     return Result<void>::success();
 }
 
@@ -309,20 +208,22 @@ Result<std::string> canonicalizeCidr(std::string_view cidr) {
 
 Result<std::string> addressHostCidr(std::string_view address) {
     const std::string text(address);
-    std::array<unsigned char, 16> binary{};
-    if (::inet_pton(AF_INET, text.c_str(), binary.data()) == 1) {
-        return Result<std::string>::success(text + "/32");
+    BinaryCidr cidr;
+    if (::inet_pton(AF_INET, text.c_str(), cidr.address.data()) == 1) {
+        cidr.family = AF_INET;
+        cidr.prefix = 32U;
+    } else if (::inet_pton(AF_INET6, text.c_str(), cidr.address.data()) == 1) {
+        cidr.family = AF_INET6;
+        cidr.prefix = 128U;
+    } else {
+        return Result<std::string>::failure(
+            makeError(ErrorCode::InvalidConfiguration, "upstream address is not an IP address"));
     }
-    if (::inet_pton(AF_INET6, text.c_str(), binary.data()) == 1) {
-        std::array<char, INET6_ADDRSTRLEN> canonical{};
-        if (::inet_ntop(AF_INET6, binary.data(), canonical.data(), canonical.size()) == nullptr) {
-            return Result<std::string>::failure(
-                makeError(ErrorCode::InvalidConfiguration, "cannot format upstream IPv6 address"));
-        }
-        return Result<std::string>::success(std::string(canonical.data()) + "/128");
+    if (isUnspecifiedAddress(cidr)) {
+        return Result<std::string>::failure(
+            makeError(ErrorCode::InvalidConfiguration, "upstream address is unspecified"));
     }
-    return Result<std::string>::failure(
-        makeError(ErrorCode::InvalidConfiguration, "upstream address is not an IP address"));
+    return Result<std::string>::success(formatCidr(cidr));
 }
 
 std::vector<std::string> BypassPolicy::allCidrs() const {
@@ -358,7 +259,7 @@ std::vector<std::string> BypassPolicy::allCidrs() const {
     for (const auto& cidr : fixed_cidrs) {
         append(cidr, false);
     }
-    for (const auto& cidr : detected_cidrs) {
+    for (const auto& cidr : interface_cidrs) {
         append(cidr, false);
     }
     return output;
@@ -368,11 +269,7 @@ Result<BypassPolicy> collectBypassPolicy(std::string_view upstream_address) {
     BypassPolicy policy;
     policy.fixed_cidrs = fixedBypassCidrs();
     std::set<std::string> seen(policy.fixed_cidrs.begin(), policy.fixed_cidrs.end());
-    const auto routes = collectKernelRoutes(policy.detected_cidrs, seen);
-    if (!routes.ok()) {
-        return Result<BypassPolicy>::failure(routes.error());
-    }
-    const auto interfaces = collectInterfaceAddresses(policy.detected_cidrs, seen);
+    const auto interfaces = collectInterfaceAddresses(policy.interface_cidrs, seen);
     if (!interfaces.ok()) {
         return Result<BypassPolicy>::failure(interfaces.error());
     }
