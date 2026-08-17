@@ -4,7 +4,19 @@ set -e
 case "$1" in
     remove|upgrade|deconfigure)
         if [ -e /run/tunproxy/state ] && command -v tunproxy >/dev/null 2>&1; then
-            tunproxy off
+            if [ -d /run/systemd/system ] && systemctl --quiet is-active tunproxy.socket; then
+                tunproxy off
+            else
+                tunproxy --direct off
+            fi
+        fi
+        if [ -d /run/systemd/system ]; then
+            if systemctl --quiet is-active tunproxy.socket; then
+                deb-systemd-invoke stop tunproxy.socket >/dev/null
+            fi
+            if systemctl --quiet is-active tunproxy.service; then
+                deb-systemd-invoke stop tunproxy.service >/dev/null
+            fi
         fi
         ;;
 esac

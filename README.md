@@ -7,6 +7,7 @@ TunProxy 不管理代理节点、订阅或路由规则，也不修改 `HTTP_PROX
 ## 特性
 
 - C++17 实现，命令行操作。
+- 无特权 CLI 通过本地 Unix Socket 调用受限的 root daemon，日常命令无需 `sudo`。
 - 固定版本的 sing-box 私有内核，首次启用时按 manifest 下载。
 - 下载、归档、二进制、版本、revision 和许可证完整校验。
 - SOCKS5 上游，支持 IPv4、域名和括号形式的 IPv6 地址。
@@ -21,28 +22,76 @@ TunProxy 不管理代理节点、订阅或路由规则，也不修改 `HTTP_PROX
 | --- | --- |
 | Ubuntu 22.04 amd64 | 正式支持 |
 | Ubuntu 24.04 amd64 | 正式支持 |
-| Ubuntu 20.04 amd64 | 发布构建以 Ubuntu 20.04 作为 ABI 基线，随发布产物验证 |
-| WSL2 Linux amd64 | 支持，前提是内核提供 TUN 且进程拥有 `CAP_NET_ADMIN` |
+| WSL2 Linux amd64 | 支持，前提是启用 systemd 且内核提供 TUN |
 | ARM64 | 暂不支持 |
 | Fedora、Arch、macOS、Windows 原生 | 未承诺兼容 |
 
-运行 `tunproxy on` 需要 root 权限、可用的 `/dev/net/tun` 和网络管理能力。首次启用还需要访问 GitHub Releases，并依赖系统提供的 `curl`、CA 证书、`tar` 和 `sha256sum`。
+`tunproxyd` 需要可用的 `/dev/net/tun` 和受限网络管理能力。控制 Socket 仅允许 root 和 `sudo` 组成员访问；Ubuntu 安装时创建的管理员默认已经属于该组。首次启用还需要访问 GitHub Releases，并依赖系统提供的 `curl`、CA 证书、`tar` 和 `sha256sum`。
 
 ## 安装
 
-发行包是 amd64 Debian 包：
+下载与系统架构匹配的 amd64 deb，并核对发布说明中给出的 SHA-256：
 
 ```bash
-sudo apt install ./tunproxy_0.1.2_amd64.deb
+sha256sum ./tunproxy_0.2.0_amd64.deb
+sudo apt install ./tunproxy_0.2.0_amd64.deb
 ```
 
-deb 安装阶段不会联网下载 sing-box，也不会安装系统级 sing-box。第一次执行 `on` 时，TunProxy 才会下载并验证固定内核。
+推荐使用 `apt install` 安装本地包，以便同时处理依赖。文件名前的 `./` 不能省略；从其他目录安装时应使用 deb 的绝对路径。
 
-### 目录和文件
+确认安装版本和控制 Socket 状态：
+
+```bash
+tunproxy --version
+systemctl is-active tunproxy.socket
+tunproxy status
+```
+
+安装阶段不会联网下载 sing-box，也不会安装系统级 sing-box。安装程序只启用 `tunproxy.socket`，不会执行 `tunproxy on`、创建 TUN、启动 sing-box 或修改路由。首次执行 `tunproxy status` 可能按需启动后台服务，但代理仍保持 `OFF`；只有用户主动执行 `tunproxy on` 才会下载并验证固定内核并启用代理。
+
+## 更新
+
+无需卸载旧版本，也不要在更新前执行 `apt remove` 或 `apt purge`。下载新版本 deb、核对 SHA-256，然后直接覆盖安装：
+
+```bash
+sha256sum ./tunproxy_0.2.0_amd64.deb
+sudo apt install ./tunproxy_0.2.0_amd64.deb
+tunproxy --version
+tunproxy status
+```
+
+示例中的文件名应替换为实际下载的新版本。该方式支持从 `0.1.x` 更新到 `0.2.x`，也用于后续版本之间的更新。
+
+更新过程遵循以下规则：
+
+1. 如果代理正在运行，先安全停止 sing-box、移除 TUN 和受管路由。
+2. 替换 CLI、后台服务、systemd 单元、man page 和默认配置模板。
+3. 保留 `/etc/tunproxy/config`、`/var/lib/tunproxy/cores/` 和 `/var/cache/tunproxy/`。
+4. 清理不兼容的 PID、锁文件和临时运行配置，再启动新版控制 Socket。
+5. 更新完成后保持 `OFF`，不会自动恢复更新前的 `ON` 状态。
+
+需要恢复代理时由用户明确执行：
+
+```bash
+tunproxy on
+```
+
+更新期间网络代理会短暂中断。如果旧实例不能安全停止，包管理操作会失败并保留持久配置与核心，不会继续进行不完整替换。重复安装相同版本用于修复本地安装时，可以执行：
+
+```bash
+sudo apt install --reinstall ./tunproxy_0.2.0_amd64.deb
+```
+
+不支持通过直接安装较低版本进行配置降级。确需回退时，应先备份 `/etc/tunproxy/config`，并按目标版本的发布说明处理兼容性。
+
+## 文件与目录
 
 | 路径 | 来源 | 用途 |
 | --- | --- | --- |
 | `/usr/bin/tunproxy` | deb | CLI 可执行文件 |
+| `/usr/lib/tunproxy/tunproxyd` | deb | 特权控制 daemon |
+| `/lib/systemd/system/tunproxy.socket` | deb | 本地控制 Socket 单元 |
+| `/lib/systemd/system/tunproxy.service` | deb | 按需启动的 daemon 单元 |
 | `/usr/share/tunproxy/config.default` | deb | 首次安装时使用的默认配置 |
 | `/usr/share/man/man8/tunproxy.8.gz` | deb | man page |
 | `/usr/share/doc/tunproxy/` | deb | README、许可证和第三方许可信息 |
@@ -54,10 +103,11 @@ deb 安装阶段不会联网下载 sing-box，也不会安装系统级 sing-box�
 | `/run/tunproxy/sing-box.log` | 运行时 | sing-box 日志 |
 | `/run/tunproxy/state` | 运行时 | PID、启动时间、核心路径和运行阶段 |
 | `/run/tunproxy/lock` | 运行时 | `on`、`off`、`setting` 操作锁 |
+| `/run/tunproxy/control.sock` | systemd | CLI 与 daemon 的本地控制 Socket |
 
 `/dev/net/tun` 是系统提供的设备节点，不属于 TunProxy 安装内容。`tunproxy0` 是运行时创建的网络接口，核心停止后应自动消失。
 
-### 卸载
+## 卸载
 
 保留用户配置、已下载核心和缓存，仅移除 deb 管理的程序、man page 和 `/usr/share` 文件：
 
@@ -71,7 +121,7 @@ sudo apt remove tunproxy
 sudo apt purge tunproxy
 ```
 
-卸载或升级前，`prerm` 会先执行 `tunproxy off`。如果核心无法安全停止，包管理操作会失败，不会继续删除状态文件。
+卸载或更新前，`prerm` 会先关闭代理。核心无法安全停止时，包管理操作会失败，不会继续删除状态文件。
 
 `apt remove` 后保留：
 
@@ -91,16 +141,16 @@ sudo apt purge tunproxy
 直接设置 URI：
 
 ```bash
-sudo tunproxy setting socks5://127.0.0.1:10808
-sudo tunproxy setting socks5://172.28.32.1:10808
-sudo tunproxy setting socks5://192.168.1.20:7890
-sudo tunproxy setting socks5://[::1]:1080
+tunproxy setting socks5://127.0.0.1:10808
+tunproxy setting socks5://172.28.32.1:10808
+tunproxy setting socks5://192.168.1.20:7890
+tunproxy setting socks5://[::1]:1080
 ```
 
 不带参数时进入交互式设置：
 
 ```bash
-sudo tunproxy setting
+tunproxy setting
 ```
 
 当前配置文件格式为：
@@ -116,9 +166,9 @@ port=10808
 ### 开启、关闭和查看状态
 
 ```bash
-sudo tunproxy on
+tunproxy on
 tunproxy status
-sudo tunproxy off
+tunproxy off
 ```
 
 `on` 和 `off` 会实时输出阶段日志。首次启用时，如果 sing-box 不存在或校验失败，会显示原因、下载重试、curl 下载进度条、归档 SHA-256、二进制版本/revision 校验、配置检查、进程启动和 TUN 接口就绪状态；已安装且校验通过时会跳过下载并明确提示。连接上游失败、TUN 不可用或 sing-box 启动失败时，错误会立即输出，不会长时间无信息等待。
@@ -146,7 +196,14 @@ Routing: auto-redirect
 /run/tunproxy/sing-box.log
 ```
 
-`on`、`off` 和配置修改使用运行锁，重复执行不会并发修改状态。`status` 不需要 root，并会验证 PID、进程启动时间和 `/proc/<pid>/exe`，不只依赖状态文件中的 PID。
+`on`、`off` 和配置修改由 daemon 串行执行；已有操作运行时，新的变更请求会立即报告正在进行的操作。`status` 仍可并发查询，并会验证 PID、进程启动时间和 `/proc/<pid>/exe`，不只依赖状态文件中的 PID。
+
+正常使用不需要 `sudo`。systemd 或控制 Socket 损坏时，管理员可以使用 root-only 恢复入口：
+
+```bash
+sudo tunproxy --direct status
+sudo tunproxy --direct off
+```
 
 ## 源码编译
 
@@ -169,12 +226,11 @@ ctest --test-dir build --output-on-failure
 生成 Debian 包：
 
 ```bash
-DEB_RULES_REQUIRES_ROOT=no \
-  debian/rules binary PACKAGE_OUTPUT=dist
-lintian --fail-on error dist/tunproxy_0.1.2_amd64.deb
+dpkg-buildpackage -b -us -uc
+lintian --fail-on error ../tunproxy_0.2.0_amd64.deb
 ```
 
-正式发布使用 Ubuntu 20.04 构建环境生成 amd64 包，以降低 glibc 最低版本要求；Ubuntu 22.04 和 24.04 在 CI 中执行安装 smoke test。
+正式发布使用 Ubuntu 22.04 构建 amd64 包。发布前应在 Ubuntu 22.04 和 24.04 上执行全新安装、覆盖更新、卸载和 TUN 往返测试。仓库不使用 GitHub Actions，构建与发布均在本地完成。
 
 ## sing-box 内核
 
@@ -217,7 +273,9 @@ TunProxy 由以下模块组成：
 
 ```text
 ConfigManager       读取、校验和原子保存 SOCKS5 配置
+CommandController   统一执行本地恢复和 daemon 控制命令
 CoreManager         下载、校验、修复和替换 sing-box
+IPC                  分帧、限长的 Unix Socket 请求与事件流
 ProxyManager        生成配置并管理 TUN/核心生命周期
 RuntimeStateStore   保存 PID、启动时间、核心路径和运行阶段
 Process             fork/exec、输出捕获和超时控制
@@ -242,15 +300,17 @@ Filesystem          原子文件写入、SHA-256 和安全目录创建
 - 运行目录逐级检查并拒绝符号链接和路径遍历。
 - 核心启动使用 `O_NOFOLLOW`、已打开文件描述符和 `fexecve()`。
 - `/var/cache/tunproxy` 使用 0700，核心目录不加入用户 `PATH`。
+- Socket 使用 `root:sudo 0660` 权限并通过 `SO_PEERCRED` 再次验证调用者。
+- daemon 由 systemd 限制能力、设备、地址族和可写路径；下载及校验子进程会清除网络 capabilities。
 - deb 安装阶段不联网，核心下载发生在显式 `tunproxy on` 操作中。
 
 ## 限制
 
-- 首发目标是 amd64 Ubuntu，不提供 ARM64 和其他发行版的正式承诺。
+- 当前目标是 amd64 Ubuntu，不提供 ARM64 和其他发行版的正式承诺。
 - 只支持 SOCKS5，不支持代理认证、HTTP CONNECT 或节点协议管理。
-- 首版重点是 TCP、DNS 和常见开发工具流量。
+- 当前重点是 TCP、DNS 和常见开发工具流量。
 - 非 DNS UDP 流量被拒绝，不适合作为游戏、VoIP 或完整 UDP 代理。
-- 不提供 systemd 常驻服务、GUI、订阅管理和自动更新 TunProxy 自身。
+- 不提供 GUI、订阅管理和自动更新 TunProxy 自身。
 
 ## 目录结构
 
@@ -260,7 +320,6 @@ src/                核心实现和 CLI 入口
 tests/              单元、进程、配置和 sing-box repair 测试
 debian/             Debian 控制文件和维护脚本
 docs/               man page
-.github/workflows/  CI、兼容性 smoke test 和 release 流程
 ```
 
 ## 许可证

@@ -23,6 +23,10 @@ struct AppPaths {
     [[nodiscard]] std::filesystem::path state_file() const {
         return runtime_dir / "state";
     }
+
+    [[nodiscard]] std::filesystem::path control_socket() const {
+        return runtime_dir / "control.sock";
+    }
 };
 
 } // namespace tunproxy

@@ -1,12 +1,14 @@
 #include "tunproxy/config.hpp"
+#include "tunproxy/controller.hpp"
+#include "tunproxy/ipc.hpp"
 #include "tunproxy/log.hpp"
-#include "tunproxy/proxy_manager.hpp"
+#include "tunproxy/paths.hpp"
 #include "tunproxy/result.hpp"
-#include "tunproxy/runtime_state.hpp"
 #include "tunproxy/version.hpp"
 
 #include <unistd.h>
 
+#include <csignal>
 #include <iostream>
 #include <string>
 
@@ -18,152 +20,157 @@ int printError(const tunproxy::Error& error) {
 }
 
 void printUsage() {
-    std::cout << "Usage: tunproxy <on|off|status|setting> [socks5://host:port]\n";
+    std::cout << "Usage: tunproxy [--direct] <on|off|status|setting> [socks5://host:port]\n";
+}
+
+void printLog(tunproxy::LogLevel level, std::string_view message) {
+    if (level == tunproxy::LogLevel::Progress) {
+        std::cerr << message << std::flush;
+        return;
+    }
+    std::ostream& output = level == tunproxy::LogLevel::Warning ? std::cerr : std::cout;
+    output << (level == tunproxy::LogLevel::Warning ? "[WARN] " : "[INFO] ")
+           << message << '\n' << std::flush;
+}
+
+tunproxy::Result<std::string> executeRemote(
+    tunproxy::Command command, const std::string& argument, const tunproxy::AppPaths& paths) {
+    const auto connected = tunproxy::connectControlSocket(paths.control_socket());
+    if (!connected.ok()) {
+        return tunproxy::Result<std::string>::failure(connected.error());
+    }
+    const int descriptor = connected.value();
+    const auto sent = tunproxy::sendIpcFrame(descriptor, tunproxy::IpcFrame{
+        tunproxy::IpcFrameType::Request, tunproxy::encodeCommand(command), argument});
+    if (!sent.ok()) {
+        (void)::close(descriptor);
+        return tunproxy::Result<std::string>::failure(sent.error());
+    }
+    for (;;) {
+        const auto frame = tunproxy::receiveIpcFrame(descriptor);
+        if (!frame.ok()) {
+            (void)::close(descriptor);
+            return tunproxy::Result<std::string>::failure(frame.error());
+        }
+        if (frame.value().type == tunproxy::IpcFrameType::Log) {
+            if (frame.value().code > static_cast<std::uint32_t>(tunproxy::LogLevel::Progress)) {
+                (void)::close(descriptor);
+                return tunproxy::Result<std::string>::failure(tunproxy::makeError(
+                    tunproxy::ErrorCode::StateError, "tunproxyd returned an invalid log level"));
+            }
+            printLog(static_cast<tunproxy::LogLevel>(frame.value().code), frame.value().payload);
+            continue;
+        }
+        (void)::close(descriptor);
+        if (frame.value().type == tunproxy::IpcFrameType::Result) {
+            return tunproxy::Result<std::string>::success(frame.value().payload);
+        }
+        if (frame.value().type == tunproxy::IpcFrameType::Error &&
+            frame.value().code >= static_cast<std::uint32_t>(tunproxy::ErrorCode::Generic) &&
+            frame.value().code <= static_cast<std::uint32_t>(tunproxy::ErrorCode::StateError)) {
+            return tunproxy::Result<std::string>::failure(tunproxy::makeError(
+                static_cast<tunproxy::ErrorCode>(frame.value().code), frame.value().payload));
+        }
+        return tunproxy::Result<std::string>::failure(tunproxy::makeError(
+            tunproxy::ErrorCode::StateError, "tunproxyd returned an invalid response"));
+    }
+}
+
+tunproxy::Result<std::string> execute(
+    bool direct, tunproxy::Command command, const std::string& argument, const tunproxy::AppPaths& paths) {
+    if (!direct) {
+        return executeRemote(command, argument, paths);
+    }
+    if (::geteuid() != 0) {
+        return tunproxy::Result<std::string>::failure(tunproxy::makeError(
+            tunproxy::ErrorCode::InsufficientPrivileges, "--direct requires root privileges"));
+    }
+    return tunproxy::CommandController(paths).execute(command, argument, printLog);
+}
+
+int interactiveSetting(bool direct, const tunproxy::AppPaths& paths) {
+    const auto current_result = execute(direct, tunproxy::Command::GetSetting, {}, paths);
+    if (!current_result.ok()) {
+        return printError(current_result.error());
+    }
+    const auto parsed = tunproxy::parseUpstreamUri(current_result.value());
+    if (!parsed.ok()) {
+        return printError(parsed.error());
+    }
+    tunproxy::Upstream updated = parsed.value();
+    std::cout << "Current upstream:\n"
+              << "  Protocol: " << updated.protocol << '\n'
+              << "  Host:     " << updated.host << '\n'
+              << "  Port:     " << updated.port << "\n\n";
+    std::string input;
+    std::cout << "New host [" << updated.host << "]: " << std::flush;
+    std::getline(std::cin, input);
+    if (!input.empty()) {
+        updated.host = input;
+    }
+    std::cout << "New port [" << updated.port << "]: " << std::flush;
+    std::getline(std::cin, input);
+    if (!input.empty()) {
+        const auto with_port = tunproxy::parseUpstreamUri(
+            "socks5://" +
+            (updated.host.find(':') == std::string::npos ? updated.host : "[" + updated.host + "]") +
+            ":" + input);
+        if (!with_port.ok()) {
+            return printError(with_port.error());
+        }
+        updated.port = with_port.value().port;
+    }
+    const auto saved = execute(
+        direct, tunproxy::Command::SetSetting, tunproxy::formatUpstreamUri(updated), paths);
+    if (!saved.ok()) {
+        return printError(saved.error());
+    }
+    std::cout << saved.value();
+    return 0;
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc < 2 || argc > 3) {
-        printUsage();
-        return static_cast<int>(tunproxy::ErrorCode::InvalidArguments);
-    }
-
-    const std::string command = argv[1];
-    if (command == "--version" || command == "version") {
-        if (argc != 2) {
-            printUsage();
-            return static_cast<int>(tunproxy::ErrorCode::InvalidArguments);
-        }
+    (void)::signal(SIGPIPE, SIG_IGN);
+    if (argc == 2 && (std::string(argv[1]) == "--version" || std::string(argv[1]) == "version")) {
         std::cout << "TunProxy " << tunproxy::kTunProxyVersion << '\n'
                   << "Managed core: sing-box 1.13.18\n";
         return 0;
     }
-    tunproxy::AppPaths paths;
-    tunproxy::ConfigManager config;
-    const tunproxy::LogCallback logger = [](tunproxy::LogLevel level, std::string_view message) {
-        if (level == tunproxy::LogLevel::Progress) {
-            std::cerr << message << std::flush;
-            return;
-        }
-        std::ostream& output = level == tunproxy::LogLevel::Warning ? std::cerr : std::cout;
-        output << (level == tunproxy::LogLevel::Warning ? "[WARN] " : "[INFO] ")
-               << message << '\n' << std::flush;
-    };
-    if (command == "setting") {
-        if (::geteuid() != 0) {
-            return printError(tunproxy::makeError(
-                tunproxy::ErrorCode::InsufficientPrivileges, "setting requires root privileges"));
-        }
-        const auto lock = tunproxy::FileLock::acquire(paths.lock_file());
-        if (!lock.ok()) {
-            return printError(lock.error());
-        }
-        if (argc == 3) {
-            const auto upstream = tunproxy::parseUpstreamUri(argv[2]);
-            if (!upstream.ok()) {
-                return printError(upstream.error());
-            }
-            const auto saved = config.save(upstream.value());
-            if (!saved.ok()) {
-                return printError(saved.error());
-            }
-            std::cout << "Saved: " << tunproxy::formatUpstreamUri(upstream.value()) << '\n';
-            return 0;
-        }
-        const auto current = config.load();
-        if (!current.ok()) {
-            return printError(current.error());
-        }
-        tunproxy::Upstream updated = current.value();
-        std::cout << "Current upstream:\n"
-                  << "  Protocol: " << updated.protocol << '\n'
-                  << "  Host:     " << updated.host << '\n'
-                  << "  Port:     " << updated.port << "\n\n";
-        std::string input;
-        std::cout << "New host [" << updated.host << "]: " << std::flush;
-        std::getline(std::cin, input);
-        if (!input.empty()) {
-            updated.host = input;
-        }
-        std::cout << "New port [" << updated.port << "]: " << std::flush;
-        std::getline(std::cin, input);
-        if (!input.empty()) {
-            const auto parsed = tunproxy::parseUpstreamUri(
-                "socks5://" +
-                (updated.host.find(':') == std::string::npos ? updated.host : "[" + updated.host + "]") +
-                ":" + input);
-            if (!parsed.ok()) {
-                return printError(parsed.error());
-            }
-            updated.port = parsed.value().port;
-        }
-        const auto saved = config.save(updated);
-        if (!saved.ok()) {
-            return printError(saved.error());
-        }
-        std::cout << "Saved: " << tunproxy::formatUpstreamUri(updated) << '\n';
-        return 0;
+    bool direct = false;
+    int command_index = 1;
+    if (argc > 1 && std::string(argv[1]) == "--direct") {
+        direct = true;
+        command_index = 2;
     }
-
-    if (command == "status") {
-        if (argc != 2) {
-            printUsage();
-            return static_cast<int>(tunproxy::ErrorCode::InvalidArguments);
-        }
-        tunproxy::ProxyManager manager(paths, logger);
-        const auto status = manager.status();
-        if (!status.ok()) {
-            return printError(status.error());
-        }
-        std::cout << "Status: " << (status.value().running ? "ON" : "OFF") << '\n';
-        if (!status.value().upstream.empty()) {
-            std::cout << "Upstream: " << status.value().upstream << '\n';
-        }
-        if (status.value().running) {
-            std::cout << "Core: sing-box " << status.value().core_version << '\n'
-                      << "PID: " << status.value().pid << '\n'
-                      << "Routing: " << status.value().routing_mode << '\n';
-        }
-        return 0;
+    const int remaining = argc - command_index;
+    if (remaining < 1 || remaining > 2) {
+        printUsage();
+        return static_cast<int>(tunproxy::ErrorCode::InvalidArguments);
     }
-
-    if (command == "on" || command == "off") {
-        if (argc != 2) {
-            printUsage();
-            return static_cast<int>(tunproxy::ErrorCode::InvalidArguments);
+    const std::string command = argv[command_index];
+    const std::string argument = remaining == 2 ? argv[command_index + 1] : std::string{};
+    tunproxy::Command parsed_command{};
+    if (command == "on") {
+        parsed_command = tunproxy::Command::On;
+    } else if (command == "off") {
+        parsed_command = tunproxy::Command::Off;
+    } else if (command == "status") {
+        parsed_command = tunproxy::Command::Status;
+    } else if (command == "setting") {
+        if (remaining == 1) {
+            return interactiveSetting(direct, tunproxy::AppPaths{});
         }
-        if (::geteuid() != 0) {
-            return printError(tunproxy::makeError(
-                tunproxy::ErrorCode::InsufficientPrivileges, command + " requires root privileges"));
-        }
-        tunproxy::emitLog(logger, tunproxy::LogLevel::Info, "Waiting for operation lock...");
-        const auto lock = tunproxy::FileLock::acquire(paths.lock_file());
-        if (!lock.ok()) {
-            return printError(lock.error());
-        }
-        tunproxy::emitLog(logger, tunproxy::LogLevel::Info, "Operation lock acquired");
-        tunproxy::ProxyManager manager(paths, logger);
-        if (command == "off") {
-            const auto stopped = manager.stop();
-            if (!stopped.ok()) {
-                return printError(stopped.error());
-            }
-            std::cout << "TunProxy: OFF\n";
-            return 0;
-        }
-        const auto started = manager.start();
-        if (!started.ok()) {
-            return printError(started.error());
-        }
-        std::cout << "TunProxy: ON\n"
-                  << "Upstream: " << started.value().upstream << '\n'
-                  << "Core: sing-box " << started.value().core_version << '\n'
-                  << "Mode: TUN\n"
-                  << "Routing: " << started.value().routing_mode << '\n';
-        return 0;
+        parsed_command = tunproxy::Command::SetSetting;
+    } else {
+        printUsage();
+        return static_cast<int>(tunproxy::ErrorCode::InvalidArguments);
     }
-
-    printUsage();
-    return static_cast<int>(tunproxy::ErrorCode::InvalidArguments);
+    const auto result = execute(direct, parsed_command, argument, tunproxy::AppPaths{});
+    if (!result.ok()) {
+        return printError(result.error());
+    }
+    std::cout << result.value();
+    return 0;
 }

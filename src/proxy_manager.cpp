@@ -346,7 +346,11 @@ Result<ProxyStatus> ProxyManager::start() {
             {core.value().executable.string(), "check", "--disable-color", "-c", config_path.string()},
             std::chrono::seconds(10));
         if (!checked.ok() || checked.value().exit_code != 0) {
-            const std::string detail = checked.ok() ? checked.value().stderr_text : checked.error().message;
+            const std::string detail = !checked.ok()
+                ? checked.error().message
+                : (!checked.value().stderr_text.empty()
+                       ? checked.value().stderr_text
+                       : "process exited with status " + std::to_string(checked.value().exit_code));
             return Result<ProxyStatus>::failure(makeError(ErrorCode::InvalidConfiguration, "sing-box config check failed: " + detail));
         }
         emitLog(logger_, LogLevel::Info, "sing-box configuration is valid");

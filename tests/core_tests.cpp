@@ -1,6 +1,8 @@
 #include "tunproxy/config.hpp"
+#include "tunproxy/controller.hpp"
 #include "tunproxy/core_manager.hpp"
 #include "tunproxy/filesystem.hpp"
+#include "tunproxy/ipc.hpp"
 #include "tunproxy/process.hpp"
 #include "tunproxy/runtime_state.hpp"
 #include "tunproxy/singbox_config.hpp"
@@ -12,6 +14,7 @@
 #include <filesystem>
 #include <iostream>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <thread>
 #include <unistd.h>
 
@@ -42,6 +45,48 @@ int main() {
     assert(loaded.ok());
     assert(loaded.value().host == "proxy.home");
     assert(loaded.value().port == 7890);
+    struct stat config_status {};
+    assert(::stat(paths.config_file.c_str(), &config_status) == 0);
+    assert((config_status.st_mode & 0777) == 0640);
+
+    const int ipc_pair_result = [] {
+        int descriptors[2]{-1, -1};
+        assert(::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, descriptors) == 0);
+        const IpcFrame sent_frame{
+            IpcFrameType::Log,
+            static_cast<std::uint32_t>(LogLevel::Progress),
+            "progress\rwith\nline boundaries"};
+        const auto frame_sent = sendIpcFrame(descriptors[0], sent_frame);
+        if (!frame_sent.ok()) {
+            std::cerr << frame_sent.error().message << '\n';
+        }
+        assert(frame_sent.ok());
+        const auto received_frame = receiveIpcFrame(descriptors[1]);
+        assert(received_frame.ok());
+        assert(received_frame.value().type == sent_frame.type);
+        assert(received_frame.value().code == sent_frame.code);
+        assert(received_frame.value().payload == sent_frame.payload);
+        assert(!sendIpcFrame(descriptors[0], IpcFrame{
+            IpcFrameType::Request, 0, std::string(kIpcMaximumPayload + 1U, 'x')}).ok());
+        const std::uint32_t invalid_size = htonl(kIpcMaximumPayload + 6U);
+        assert(::write(descriptors[0], &invalid_size, sizeof(invalid_size)) ==
+            static_cast<ssize_t>(sizeof(invalid_size)));
+        assert(!receiveIpcFrame(descriptors[1]).ok());
+        (void)::close(descriptors[0]);
+        (void)::close(descriptors[1]);
+        return 0;
+    }();
+    assert(ipc_pair_result == 0);
+
+    AppPaths controller_paths = paths;
+    controller_paths.runtime_dir = root / "controller-run";
+    const CommandController controller(controller_paths);
+    const auto set_result = controller.execute(
+        Command::SetSetting, "socks5://controller.local:1081");
+    assert(set_result.ok());
+    const auto get_result = controller.execute(Command::GetSetting, {});
+    assert(get_result.ok());
+    assert(get_result.value() == "socks5://controller.local:1081");
 
     const auto symlink_parent = root / "symlink-parent";
     assert(std::filesystem::create_directories(root / "real-parent"));

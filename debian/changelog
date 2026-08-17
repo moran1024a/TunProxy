@@ -1,3 +1,15 @@
+tunproxy (0.2.0) unstable; urgency=medium
+
+  * Add an unprivileged CLI and a socket-activated privileged daemon.
+  * Allow Ubuntu sudo-group administrators to use daily commands without sudo.
+  * Preserve configuration and verified cores during in-place package upgrades.
+  * Keep the proxy disabled after fresh installation and package upgrades.
+  * Harden daemon capabilities and clear them from download and verification
+    tools.
+  * Document installation, in-place updates, reinstall, and removal behavior.
+
+ -- TunProxy Maintainers <maintainers@tunproxy.invalid>  Mon, 17 Aug 2026 12:00:00 +0800
+
 tunproxy (0.1.2) unstable; urgency=medium
 
   * Fix on/off log callback wiring so stage and download output is visible.

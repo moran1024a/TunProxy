@@ -1,16 +1,27 @@
 #!/bin/sh
 set -e
 
-install -d -m 0755 /etc/tunproxy
+install -d -m 0750 /etc/tunproxy
 install -d -m 0750 /var/lib/tunproxy/cores
 install -d -m 0700 /var/cache/tunproxy
+install -d -m 0755 /run/tunproxy
+chown root:root /etc/tunproxy /var/lib/tunproxy /var/lib/tunproxy/cores \
+    /var/cache/tunproxy /run/tunproxy
 
 if [ -L /etc/tunproxy/config ]; then
     echo "tunproxy: refusing to follow symlink /etc/tunproxy/config" >&2
     exit 1
 fi
 if [ ! -e /etc/tunproxy/config ]; then
-    install -m 0644 /usr/share/tunproxy/config.default /etc/tunproxy/config
+    install -m 0640 /usr/share/tunproxy/config.default /etc/tunproxy/config
+fi
+chown root:root /etc/tunproxy/config
+chmod 0640 /etc/tunproxy/config
+
+if [ "$1" = "configure" ]; then
+    # Runtime files are not compatible across the direct and daemon architectures.
+    # prerm stops the proxy before unpacking; only transient state is removed here.
+    rm -f /run/tunproxy/lock /run/tunproxy/state /run/tunproxy/sing-box.json
 fi
 
 #DEBHELPER#

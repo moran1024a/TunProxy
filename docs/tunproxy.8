@@ -1,31 +1,42 @@
-.TH TUNPROXY 8 "August 2026" "TunProxy 0.1.2" "System Administration"
+.TH TUNPROXY 8 "August 2026" "TunProxy 0.2.0" "System Administration"
 .SH NAME
 tunproxy \- manage a transparent TUN proxy through a pinned sing-box core
 .SH SYNOPSIS
 .B tunproxy
+.RI [ --direct ]
 .RI { on | off | status | setting }
 .RI [ socks5://host:port ]
+.br
+.B tunproxy --version
 .SH DESCRIPTION
 .B tunproxy
 creates a system TUN interface and forwards TCP traffic to a configured SOCKS5
-upstream. It does not use shell proxy environment variables and does not manage
-proxy nodes or subscriptions.
+upstream. The command-line client uses a root-owned local daemon, so members of
+the Ubuntu sudo group do not need sudo for normal commands. It does not use
+shell proxy environment variables and does not manage proxy nodes or subscriptions.
 .SH COMMANDS
 .TP
 .B on
 Verify or repair the managed core, validate the upstream, and enable the TUN.
-Requires root privileges. Progress and stage messages are printed while the
-core is downloaded, verified, started, and attached to the TUN interface.
+Progress and stage messages are printed while the core is downloaded, verified,
+started, and attached to the TUN interface.
 .TP
 .B off
-Stop the managed core and remove its runtime state. Requires root privileges.
+Stop the managed core and remove its runtime state.
 Stage messages identify the process termination and TUN interface cleanup.
 .TP
 .B status
 Show the current state, upstream, managed core version, PID, and routing mode.
 .TP
 .B setting
-Show or update the SOCKS5 upstream. Requires root privileges.
+Show or update the SOCKS5 upstream.
+.TP
+.B --version
+Show the installed TunProxy version and managed sing-box version.
+.TP
+.B --direct
+Bypass the daemon for recovery on systems where the control service is
+unavailable. This mode requires root privileges.
 .SH FILES
 .TP
 .I /etc/tunproxy/config
@@ -37,12 +48,43 @@ Verified private sing-box executable.
 .I /run/tunproxy/
 Runtime configuration, state, lock, and log files.
 .TP
+.I /run/tunproxy/control.sock
+Local control Socket. Access is limited to root and members of the sudo group.
+.TP
 .I /var/cache/tunproxy/
 Temporary sing-box archives. The download progress bar is printed to standard
 error while an archive is being fetched.
+.SH INSTALLATION
+Install the local Debian package with
+.BR "sudo apt install ./tunproxy_VERSION_amd64.deb" .
+Using apt is recommended so package dependencies are resolved. Installation
+enables only
+.BR tunproxy.socket .
+It does not enable the proxy, create a TUN interface, start sing-box, or modify
+routes.
+.SH UPDATE
+Install a newer Debian package directly over the installed version with
+.BR "sudo apt install ./tunproxy_VERSION_amd64.deb" .
+Do not remove or purge the old package first. The update safely stops an active
+proxy and preserves
+.IR /etc/tunproxy/config ,
+verified cores under
+.IR /var/lib/tunproxy/cores/ ,
+and the download cache. The proxy remains off after the update until the user
+explicitly runs
+.BR "tunproxy on" .
+Confirm the installed version and disabled state with
+.B tunproxy --version
+and
+.BR "tunproxy status" .
+Use
+.B apt install --reinstall
+to repair an installation with the same package version.
 .SH LIMITATIONS
-Version 0.1 proxies TCP traffic. DNS is sent through DNS-over-HTTPS via the
+The current release proxies TCP traffic. DNS is sent through DNS-over-HTTPS via the
 SOCKS5 upstream. Other UDP traffic is rejected.
 .SH SEE ALSO
+.BR apt (8),
+.BR systemctl (1),
 .BR ip (8),
 .BR curl (1)

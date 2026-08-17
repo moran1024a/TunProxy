@@ -15,6 +15,16 @@
 namespace tunproxy {
 namespace {
 
+std::string processFailureDetail(const Result<ProcessOutput>& process) {
+    if (!process.ok()) {
+        return process.error().message;
+    }
+    if (!process.value().stderr_text.empty()) {
+        return process.value().stderr_text;
+    }
+    return "process exited with status " + std::to_string(process.value().exit_code);
+}
+
 class TemporaryTree {
 public:
     explicit TemporaryTree(std::filesystem::path path) : path_(std::move(path)) {}
@@ -201,9 +211,7 @@ Result<CoreInfo> CoreManager::repairCore() {
             emitLog(logger_, LogLevel::Info, "sing-box download completed");
             break;
         }
-        const std::string detail = download.ok()
-            ? download.value().stderr_text
-            : download.error().message;
+        const std::string detail = processFailureDetail(download);
         emitLog(logger_, LogLevel::Warning,
             "sing-box download attempt failed: " + detail);
         if (attempt < 2) {
@@ -212,9 +220,7 @@ Result<CoreInfo> CoreManager::repairCore() {
         }
     }
     if (!download.ok() || download.value().exit_code != 0) {
-        const std::string detail = download.ok()
-            ? download.value().stderr_text
-            : download.error().message;
+        const std::string detail = processFailureDetail(download);
         return Result<CoreInfo>::failure(makeError(
             ErrorCode::CoreDownloadFailure,
             "sing-box download failed: " + detail));

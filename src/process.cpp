@@ -6,7 +6,11 @@
 #include <csignal>
 #include <cstring>
 #include <fcntl.h>
+#include <linux/capability.h>
+#include <linux/securebits.h>
 #include <poll.h>
+#include <sys/prctl.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -52,6 +56,31 @@ std::string readAvailable(int fd) {
     return result;
 }
 
+bool dropUtilityCapabilities() {
+    if (::geteuid() != 0) {
+        return true;
+    }
+    constexpr int required_securebits =
+        SECBIT_NOROOT | SECBIT_NOROOT_LOCKED | SECBIT_NO_SETUID_FIXUP |
+        SECBIT_NO_SETUID_FIXUP_LOCKED;
+    const int current_securebits = ::prctl(PR_GET_SECUREBITS, 0, 0, 0, 0);
+    if (current_securebits < 0 ||
+        ((current_securebits & required_securebits) != required_securebits &&
+         ::prctl(PR_SET_SECUREBITS, required_securebits, 0, 0, 0) != 0)) {
+        return false;
+    }
+#ifdef PR_CAP_AMBIENT
+    if (::prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) != 0 && errno != EINVAL) {
+        return false;
+    }
+#endif
+    __user_cap_header_struct header{};
+    header.version = _LINUX_CAPABILITY_VERSION_3;
+    header.pid = 0;
+    __user_cap_data_struct capabilities[2]{};
+    return ::syscall(SYS_capset, &header, capabilities) == 0;
+}
+
 } // namespace
 
 Result<ProcessOutput> runCapture(
@@ -93,6 +122,10 @@ Result<ProcessOutput> runCapture(
         closeFd(stdout_pipe.write);
         closeFd(stderr_pipe.read);
         closeFd(stderr_pipe.write);
+
+        if (!dropUtilityCapabilities()) {
+            _exit(126);
+        }
 
         std::vector<char*> argv;
         argv.reserve(arguments.size() + 1);

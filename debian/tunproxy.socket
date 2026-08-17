@@ -1,0 +1,13 @@
+[Unit]
+Description=TunProxy local control socket
+
+[Socket]
+ListenStream=/run/tunproxy/control.sock
+SocketUser=root
+SocketGroup=sudo
+SocketMode=0660
+DirectoryMode=0755
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

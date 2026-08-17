@@ -165,7 +165,7 @@ Result<void> ConfigManager::save(const Upstream& upstream) const {
     if (!validated.ok()) {
         return Result<void>::failure(validated.error());
     }
-    const auto directory = ensureDirectory(paths_.config_file.parent_path(), 0755);
+    const auto directory = ensureDirectory(paths_.config_file.parent_path(), 0750);
     if (!directory.ok()) {
         return directory;
     }
@@ -173,7 +173,7 @@ Result<void> ConfigManager::save(const Upstream& upstream) const {
     contents << "protocol=" << upstream.protocol << '\n'
              << "host=" << upstream.host << '\n'
              << "port=" << upstream.port << '\n';
-    return writeFileAtomic(paths_.config_file, contents.str(), 0644);
+    return writeFileAtomic(paths_.config_file, contents.str(), 0640);
 }
 
 } // namespace tunproxy

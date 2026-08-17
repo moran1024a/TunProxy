@@ -1,0 +1,31 @@
+[Unit]
+Description=TunProxy privileged network controller
+Documentation=man:tunproxy(8)
+Requires=tunproxy.socket
+After=network.target tunproxy.socket
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/tunproxy/tunproxyd
+User=root
+Group=root
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_MKNOD
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_MKNOD
+SecureBits=noroot noroot-locked no-setuid-fixup no-setuid-fixup-locked
+ProtectSystem=strict
+ReadWritePaths=/etc/tunproxy /var/lib/tunproxy /var/cache/tunproxy /run/tunproxy
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+DevicePolicy=closed
+DeviceAllow=/dev/net/tun rw
+TimeoutStopSec=15s
+Restart=on-failure
+RestartSec=1s

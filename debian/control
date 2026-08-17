@@ -8,7 +8,7 @@ Rules-Requires-Root: no
 
 Package: tunproxy
 Architecture: amd64
-Depends: ${shlibs:Depends}, ${misc:Depends}, curl, ca-certificates
+Depends: ${shlibs:Depends}, ${misc:Depends}, curl, ca-certificates, sudo
 Description: Minimal transparent TUN proxy controller
  TunProxy manages a pinned private sing-box core and forwards Linux traffic to
  a user-configured SOCKS5 upstream without shell proxy environment variables.
