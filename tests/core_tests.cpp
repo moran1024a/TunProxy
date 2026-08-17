@@ -1,3 +1,4 @@
+#include "tunproxy/bypass_policy.hpp"
 #include "tunproxy/config.hpp"
 #include "tunproxy/controller.hpp"
 #include "tunproxy/core_manager.hpp"
@@ -9,6 +10,7 @@
 #include "tunproxy/upstream.hpp"
 
 #include <arpa/inet.h>
+#include <algorithm>
 #include <cassert>
 #include <cstdlib>
 #include <filesystem>
@@ -31,6 +33,35 @@ int main() {
     assert(!parseUpstreamUri("http://127.0.0.1:1080").ok());
     assert(!parseUpstreamUri("socks5://127.0.0.1:0").ok());
     assert(!parseUpstreamUri("socks5://127.0.0.1").ok());
+
+    assert(canonicalizeCidr("192.168.1.27/24").value() == "192.168.1.0/24");
+    assert(canonicalizeCidr("fd00::1234/64").value() == "fd00::/64");
+    assert(!canonicalizeCidr("192.168.1.1/33").ok());
+    assert(addressHostCidr("192.0.2.10").value() == "192.0.2.10/32");
+    assert(addressHostCidr("2001:db8::1").value() == "2001:db8::1/128");
+    const BypassPolicy normalized_policy{
+        {"10.0.0.0/8"},
+        {"10.1.2.3/32", "192.0.2.0/24"},
+        "10.9.8.7/32",
+    };
+    const auto normalized_cidrs = normalized_policy.allCidrs();
+    assert(normalized_cidrs.size() == 3);
+    assert(normalized_cidrs[0] == "10.9.8.7/32");
+    assert(normalized_cidrs[1] == "10.0.0.0/8");
+    assert(normalized_cidrs[2] == "192.0.2.0/24");
+    const auto bypass_policy = collectBypassPolicy("192.0.2.10");
+    if (!bypass_policy.ok()) {
+        if (bypass_policy.error().message.find("Operation not permitted") == std::string::npos) {
+            std::cerr << bypass_policy.error().message << '\n';
+        }
+        assert(bypass_policy.error().message.find("Operation not permitted") != std::string::npos);
+    } else {
+        assert(bypass_policy.value().upstream_cidr == "192.0.2.10/32");
+        const auto bypass_cidrs = bypass_policy.value().allCidrs();
+        assert(!bypass_cidrs.empty());
+        assert(bypass_cidrs.front() == "192.0.2.10/32");
+        assert(std::find(bypass_cidrs.begin(), bypass_cidrs.end(), "10.0.0.0/8") != bypass_cidrs.end());
+    }
 
     const auto root = std::filesystem::temp_directory_path() /
         ("tunproxy-config-test-" + std::to_string(static_cast<long long>(::getpid())));
@@ -96,12 +127,17 @@ int main() {
     const auto generated = buildSingBoxConfig(SingBoxRuntimeConfig{
         root / "sing-box.log",
         ResolvedUpstream{Upstream{"socks5", "proxy.home", 7890}, "192.0.2.10"},
+        {"192.0.2.10/32", "10.0.0.0/8", "fe80::/10"},
         true,
     });
     assert(generated.ok());
     assert(generated.value().find("\"auto_redirect\": true") != std::string::npos);
     assert(generated.value().find("\"server\": \"192.0.2.10\"") != std::string::npos);
+    assert(generated.value().find("\"route_exclude_address\": [\"192.0.2.10/32\"") != std::string::npos);
+    assert(generated.value().find("\"type\": \"direct\"") != std::string::npos);
+    assert(generated.value().find("\"outbound\": \"direct\"") != std::string::npos);
     assert(generated.value().find("\"action\": \"hijack-dns\"") != std::string::npos);
+    assert(generated.value().find("\"ip_cidr\"") < generated.value().find("\"action\": \"hijack-dns\""));
     if (const char* real_core = std::getenv("TUNPROXY_TEST_SINGBOX"); real_core != nullptr) {
         const auto real_config = root / "real-sing-box.json";
         assert(writeFileAtomic(real_config, generated.value(), 0600).ok());
@@ -191,10 +227,21 @@ int main() {
     assert(ticks.ok());
     const auto executable = std::filesystem::read_symlink("/proc/self/exe");
     RuntimeState runtime_state{
-        ::getpid(), ticks.value(), executable, "test", "socks5://127.0.0.1:1080", "test-mode", "running"};
+        ::getpid(),
+        ticks.value(),
+        executable,
+        "test",
+        "socks5://127.0.0.1:1080",
+        "test-mode",
+        "127.0.0.1",
+        {"127.0.0.0/8", "127.0.0.1/32"},
+        "running",
+    };
     assert(state_store.save(runtime_state).ok());
     const auto state_loaded = state_store.load();
     assert(state_loaded.ok());
+    assert(state_loaded.value().upstream_address == "127.0.0.1");
+    assert(state_loaded.value().bypass_cidrs.size() == 2);
     const auto managed = state_store.isManagedProcessRunning(state_loaded.value());
     assert(managed.ok() && managed.value());
 

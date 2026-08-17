@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 #include <sys/types.h>
 
@@ -18,6 +19,8 @@ struct RuntimeState {
     std::string core_version;
     std::string upstream;
     std::string routing_mode;
+    std::string upstream_address;
+    std::vector<std::string> bypass_cidrs;
     std::string phase{"running"};
 };
 

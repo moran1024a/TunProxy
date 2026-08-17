@@ -1,10 +1,10 @@
-.TH TUNPROXY 8 "August 2026" "TunProxy 0.2.0" "System Administration"
+.TH TUNPROXY 8 "August 2026" "TunProxy 0.3.0-rc.1" "System Administration"
 .SH NAME
 tunproxy \- manage a transparent TUN proxy through a pinned sing-box core
 .SH SYNOPSIS
 .B tunproxy
 .RI [ --direct ]
-.RI { on | off | status | setting }
+.RI { on | off | status | bypass | setting }
 .RI [ socks5://host:port ]
 .br
 .B tunproxy --version
@@ -27,6 +27,11 @@ Stage messages identify the process termination and TUN interface cleanup.
 .TP
 .B status
 Show the current state, upstream, managed core version, PID, and routing mode.
+.TP
+.B bypass
+Show the fixed internal bypass policy, its active or preview state, effective
+CIDRs, selected upstream address, and routing order. The policy cannot be
+disabled or changed through user configuration.
 .TP
 .B setting
 Show or update the SOCKS5 upstream.
@@ -82,7 +87,15 @@ Use
 to repair an installation with the same package version.
 .SH LIMITATIONS
 The current release proxies TCP traffic. DNS is sent through DNS-over-HTTPS via the
-SOCKS5 upstream. Other UDP traffic is rejected.
+SOCKS5 upstream. UDP traffic to local and bypassed networks is direct; other
+non-DNS UDP traffic is rejected.
+.SH BYPASS POLICY
+The bypass policy always excludes loopback, private, carrier-grade NAT,
+link-local, unique-local, multicast, and broadcast ranges. Before enabling the
+TUN, TunProxy also reads interface addresses and existing non-default IPv4 and
+IPv6 routes through rtnetlink. The IP address selected for the SOCKS5 upstream
+is always added as a direct host route. The TUN address space 198.18.0.0/15 is
+not imported from detected routes.
 .SH SEE ALSO
 .BR apt (8),
 .BR systemctl (1),

@@ -1,3 +1,11 @@
+tunproxy (0.3.0~rc1) unstable; urgency=medium
+
+  * Always bypass local, private, link-local, multicast, and broadcast ranges.
+  * Preserve existing non-default routes and the selected SOCKS5 upstream path.
+  * Add a read-only command that shows the active internal bypass policy.
+
+ -- TunProxy Maintainers <maintainers@tunproxy.invalid>  Mon, 17 Aug 2026 18:00:00 +0800
+
 tunproxy (0.2.0) unstable; urgency=medium
 
   * Add an unprivileged CLI and a socket-activated privileged daemon.

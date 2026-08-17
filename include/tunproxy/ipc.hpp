@@ -24,6 +24,7 @@ enum class Command : std::uint32_t {
     Status = 3,
     GetSetting = 4,
     SetSetting = 5,
+    Bypass = 6,
 };
 
 constexpr std::uint32_t encodeCommand(Command command) {

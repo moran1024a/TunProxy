@@ -5,12 +5,14 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace tunproxy {
 
 struct SingBoxRuntimeConfig {
     std::filesystem::path log_file;
     ResolvedUpstream upstream;
+    std::vector<std::string> bypass_cidrs;
     bool auto_redirect{true};
 };
 

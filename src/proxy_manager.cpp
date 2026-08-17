@@ -1,5 +1,6 @@
 #include "tunproxy/proxy_manager.hpp"
 
+#include "tunproxy/bypass_policy.hpp"
 #include "tunproxy/filesystem.hpp"
 #include "tunproxy/process.hpp"
 #include "tunproxy/singbox_config.hpp"
@@ -266,6 +267,8 @@ Result<ProxyStatus> ProxyManager::start() {
                 existing_state.value().core_version,
                 existing_state.value().pid,
                 existing_state.value().routing_mode,
+                existing_state.value().upstream_address,
+                existing_state.value().bypass_cidrs,
             });
         }
         if (running.ok() && running.value()) {
@@ -300,6 +303,15 @@ Result<ProxyStatus> ProxyManager::start() {
     }
     emitLog(logger_, LogLevel::Info,
         "Upstream connection succeeded via " + resolved.value().address);
+    emitLog(logger_, LogLevel::Info, "Detecting local addresses and existing routes...");
+    const auto bypass = collectBypassPolicy(resolved.value().address);
+    if (!bypass.ok()) {
+        return Result<ProxyStatus>::failure(bypass.error());
+    }
+    const auto bypass_cidrs = bypass.value().allCidrs();
+    emitLog(logger_, LogLevel::Info,
+        "Bypass policy ready: " + std::to_string(bypass_cidrs.size()) +
+        " CIDRs, upstream pinned as " + bypass.value().upstream_cidr);
     const auto core = core_.ensureCore();
     if (!core.ok()) {
         return Result<ProxyStatus>::failure(core.error());
@@ -333,7 +345,8 @@ Result<ProxyStatus> ProxyManager::start() {
         emitLog(logger_, LogLevel::Info,
             std::string("Generating sing-box configuration (mode: ") +
             (auto_redirect ? "auto-redirect" : "tun-route") + ")...");
-        const auto json = buildSingBoxConfig(SingBoxRuntimeConfig{log_path, resolved.value(), auto_redirect});
+        const auto json = buildSingBoxConfig(
+            SingBoxRuntimeConfig{log_path, resolved.value(), bypass_cidrs, auto_redirect});
         if (!json.ok()) {
             return Result<ProxyStatus>::failure(json.error());
         }
@@ -381,6 +394,8 @@ Result<ProxyStatus> ProxyManager::start() {
         runtime_state.core_version = core.value().version;
         runtime_state.upstream = formatUpstreamUri(configured.value());
         runtime_state.routing_mode = auto_redirect ? "auto-redirect" : "tun-route";
+        runtime_state.upstream_address = resolved.value().address;
+        runtime_state.bypass_cidrs = bypass_cidrs;
         runtime_state.phase = "starting";
         const auto provisional = state_.save(runtime_state);
         if (!provisional.ok()) {
@@ -434,6 +449,8 @@ Result<ProxyStatus> ProxyManager::start() {
             runtime_state.core_version,
             runtime_state.pid,
             runtime_state.routing_mode,
+            runtime_state.upstream_address,
+            runtime_state.bypass_cidrs,
         });
     }
     return Result<ProxyStatus>::failure(std::move(last_error));
@@ -493,6 +510,8 @@ Result<ProxyStatus> ProxyManager::status() const {
     status.core_version = runtime_state.value().core_version;
     status.pid = runtime_state.value().pid;
     status.routing_mode = runtime_state.value().routing_mode;
+    status.upstream_address = runtime_state.value().upstream_address;
+    status.bypass_cidrs = runtime_state.value().bypass_cidrs;
     return Result<ProxyStatus>::success(std::move(status));
 }
 

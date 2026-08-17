@@ -33,6 +33,35 @@ std::string readLink(const std::filesystem::path& path) {
     return error ? std::string{} : value.string();
 }
 
+std::vector<std::string> splitCidrs(const std::string& text) {
+    std::vector<std::string> output;
+    std::size_t offset = 0;
+    while (offset < text.size()) {
+        const auto separator = text.find(',', offset);
+        const auto length = separator == std::string::npos ? std::string::npos : separator - offset;
+        const std::string value = text.substr(offset, length);
+        if (!value.empty()) {
+            output.push_back(value);
+        }
+        if (separator == std::string::npos) {
+            break;
+        }
+        offset = separator + 1;
+    }
+    return output;
+}
+
+std::string joinCidrs(const std::vector<std::string>& values) {
+    std::ostringstream output;
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        if (index != 0) {
+            output << ',';
+        }
+        output << values[index];
+    }
+    return output.str();
+}
+
 } // namespace
 
 RuntimeStateStore::RuntimeStateStore(AppPaths paths) : paths_(std::move(paths)) {}
@@ -64,6 +93,8 @@ Result<RuntimeState> RuntimeStateStore::load() const {
     state.core_version = values["core_version"];
     state.upstream = values["upstream"];
     state.routing_mode = values["routing_mode"];
+    state.upstream_address = values["upstream_address"];
+    state.bypass_cidrs = splitCidrs(values["bypass_cidrs"]);
     state.phase = values["phase"];
     if (state.executable.empty() || state.core_version.empty() || state.upstream.empty() ||
         (state.phase != "starting" && state.phase != "running") || state.routing_mode.empty()) {
@@ -84,6 +115,8 @@ Result<void> RuntimeStateStore::save(const RuntimeState& state) const {
             << "core_version=" << state.core_version << '\n'
             << "upstream=" << state.upstream << '\n'
             << "routing_mode=" << state.routing_mode << '\n'
+            << "upstream_address=" << state.upstream_address << '\n'
+            << "bypass_cidrs=" << joinCidrs(state.bypass_cidrs) << '\n'
             << "phase=" << state.phase << '\n';
     return writeFileAtomic(paths_.state_file(), content.str(), 0644);
 }

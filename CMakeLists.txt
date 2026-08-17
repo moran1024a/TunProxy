@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(tunproxy VERSION 0.2.0 LANGUAGES CXX)
+project(tunproxy VERSION 0.3.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 
@@ -11,6 +11,7 @@ set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
 
 add_library(tunproxy_core
+    src/bypass_policy.cpp
     src/config.cpp
     src/controller.cpp
     src/core_manager.cpp

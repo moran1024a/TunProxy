@@ -29,12 +29,27 @@ std::string jsonEscape(const std::string& input) {
     return escaped.str();
 }
 
+void writeStringArray(std::ostringstream& output, const std::vector<std::string>& values) {
+    output << '[';
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        if (index != 0) {
+            output << ", ";
+        }
+        output << '"' << jsonEscape(values[index]) << '"';
+    }
+    output << ']';
+}
+
 } // namespace
 
 Result<std::string> buildSingBoxConfig(const SingBoxRuntimeConfig& config) {
     if (config.upstream.address.empty()) {
         return Result<std::string>::failure(
             makeError(ErrorCode::InvalidConfiguration, "resolved upstream address is empty"));
+    }
+    if (config.bypass_cidrs.empty()) {
+        return Result<std::string>::failure(
+            makeError(ErrorCode::InvalidConfiguration, "bypass policy is empty"));
     }
     std::ostringstream json;
     json << "{\n"
@@ -51,15 +66,21 @@ Result<std::string> buildSingBoxConfig(const SingBoxRuntimeConfig& config) {
          << "    \"type\": \"tun\", \"tag\": \"tun-in\", \"interface_name\": \"tunproxy0\",\n"
          << "    \"address\": [\"198.18.0.1/30\"], \"mtu\": 1500, \"auto_route\": true,\n"
          << "    \"auto_redirect\": " << (config.auto_redirect ? "true" : "false")
-         << ", \"strict_route\": true, \"stack\": \"system\"\n"
+         << ", \"strict_route\": true, \"stack\": \"system\",\n"
+         << "    \"route_exclude_address\": ";
+    writeStringArray(json, config.bypass_cidrs);
+    json << "\n"
          << "  }],\n"
          << "  \"outbounds\": [{\n"
          << "    \"type\": \"socks\", \"tag\": \"proxy\", \"server\": \""
          << jsonEscape(config.upstream.address) << "\", \"server_port\": "
          << config.upstream.configured.port << ", \"version\": \"5\", \"network\": \"tcp\"\n"
-         << "  }],\n"
+         << "  }, {\"type\": \"direct\", \"tag\": \"direct\"}],\n"
          << "  \"route\": {\n"
-         << "    \"rules\": [{\"port\": 53, \"action\": \"hijack-dns\"}, "
+         << "    \"rules\": [{\"ip_cidr\": ";
+    writeStringArray(json, config.bypass_cidrs);
+    json << ", \"action\": \"route\", \"outbound\": \"direct\"}, "
+         << "{\"port\": 53, \"action\": \"hijack-dns\"}, "
             "{\"network\": \"udp\", \"action\": \"reject\"}],\n"
          << "    \"final\": \"proxy\", \"auto_detect_interface\": true\n"
          << "  }\n"

@@ -195,6 +195,8 @@ const char* commandName(tunproxy::Command command) {
         return "setting query";
     case tunproxy::Command::SetSetting:
         return "setting update";
+    case tunproxy::Command::Bypass:
+        return "bypass query";
     }
     return "unknown";
 }
@@ -216,7 +218,7 @@ bool decodeCommand(std::uint32_t code, tunproxy::Command& command) {
     }
     const std::uint32_t command_code = code & 0xffffU;
     if (command_code < static_cast<std::uint32_t>(tunproxy::Command::On) ||
-        command_code > static_cast<std::uint32_t>(tunproxy::Command::SetSetting)) {
+        command_code > static_cast<std::uint32_t>(tunproxy::Command::Bypass)) {
         return false;
     }
     command = static_cast<tunproxy::Command>(command_code);

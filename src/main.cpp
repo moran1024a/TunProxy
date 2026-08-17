@@ -20,7 +20,7 @@ int printError(const tunproxy::Error& error) {
 }
 
 void printUsage() {
-    std::cout << "Usage: tunproxy [--direct] <on|off|status|setting> [socks5://host:port]\n";
+    std::cout << "Usage: tunproxy [--direct] <on|off|status|bypass|setting> [socks5://host:port]\n";
 }
 
 void printLog(tunproxy::LogLevel level, std::string_view message) {
@@ -158,6 +158,8 @@ int main(int argc, char** argv) {
         parsed_command = tunproxy::Command::Off;
     } else if (command == "status") {
         parsed_command = tunproxy::Command::Status;
+    } else if (command == "bypass") {
+        parsed_command = tunproxy::Command::Bypass;
     } else if (command == "setting") {
         if (remaining == 1) {
             return interactiveSetting(direct, tunproxy::AppPaths{});

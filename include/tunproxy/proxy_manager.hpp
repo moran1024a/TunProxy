@@ -10,6 +10,7 @@
 #include <chrono>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace tunproxy {
 
@@ -19,6 +20,8 @@ struct ProxyStatus {
     std::string core_version;
     pid_t pid{-1};
     std::string routing_mode;
+    std::string upstream_address;
+    std::vector<std::string> bypass_cidrs;
 };
 
 class ProxyManager {
