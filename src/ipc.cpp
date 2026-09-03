@@ -54,6 +54,18 @@ Result<void> receiveAll(int descriptor, void* data, std::size_t size) {
 
 } // namespace
 
+Result<Command> decodeCommand(std::uint32_t code) {
+    if ((code >> 16U) != kIpcProtocolVersion) {
+        return Result<Command>::failure(makeError(ErrorCode::InvalidArguments, "unsupported IPC protocol version"));
+    }
+    const std::uint32_t command_code = code & 0xffffU;
+    if (command_code < static_cast<std::uint32_t>(Command::On) ||
+        command_code > static_cast<std::uint32_t>(Command::Bypass)) {
+        return Result<Command>::failure(makeError(ErrorCode::InvalidArguments, "unknown IPC command"));
+    }
+    return Result<Command>::success(static_cast<Command>(command_code));
+}
+
 Result<void> sendIpcFrame(int descriptor, const IpcFrame& frame) {
     if (frame.payload.size() > kIpcMaximumPayload) {
         return Result<void>::failure(makeError(ErrorCode::InvalidArguments, "IPC payload is too large"));

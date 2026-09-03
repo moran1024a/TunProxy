@@ -1,3 +1,5 @@
+#include "tunproxy/authorization.hpp"
+#include "tunproxy/constants.hpp"
 #include "tunproxy/controller.hpp"
 #include "tunproxy/filesystem.hpp"
 #include "tunproxy/ipc.hpp"
@@ -5,7 +7,6 @@
 
 #include <fcntl.h>
 #include <grp.h>
-#include <pwd.h>
 #include <poll.h>
 #include <signal.h>
 #include <sys/socket.h>
@@ -28,6 +29,9 @@
 #include <vector>
 
 namespace {
+
+// Local administrators must belong to this group to reach the control socket.
+constexpr const char* kAdminGroup = "sudo";
 
 volatile sig_atomic_t stop_requested = 0;
 
@@ -113,14 +117,14 @@ tunproxy::Result<int> createSocket(const std::filesystem::path& path) {
         return tunproxy::Result<int>::failure(tunproxy::makeError(
             tunproxy::ErrorCode::StateError, "cannot bind control socket: " + detail));
     }
-    const group* sudo_group = ::getgrnam("sudo");
-    if (sudo_group == nullptr) {
+    const group* admin_group = ::getgrnam(kAdminGroup);
+    if (admin_group == nullptr) {
         (void)::close(descriptor);
         (void)::unlink(path.c_str());
         return tunproxy::Result<int>::failure(tunproxy::makeError(
-            tunproxy::ErrorCode::StateError, "system group 'sudo' does not exist"));
+            tunproxy::ErrorCode::StateError, std::string("system group '") + kAdminGroup + "' does not exist"));
     }
-    if (::chown(path.c_str(), 0, sudo_group->gr_gid) != 0 || ::chmod(path.c_str(), 0660) != 0 ||
+    if (::chown(path.c_str(), 0, admin_group->gr_gid) != 0 || ::chmod(path.c_str(), 0660) != 0 ||
         ::listen(descriptor, 8) != 0) {
         const std::string detail = std::strerror(errno);
         (void)::close(descriptor);
@@ -129,44 +133,6 @@ tunproxy::Result<int> createSocket(const std::filesystem::path& path) {
             tunproxy::ErrorCode::StateError, "cannot secure control socket: " + detail));
     }
     return tunproxy::Result<int>::success(descriptor);
-}
-
-bool userBelongsToSudoGroup(uid_t uid, gid_t primary_gid) {
-    if (uid == 0) {
-        return true;
-    }
-    const group* sudo_group = ::getgrnam("sudo");
-    if (sudo_group == nullptr) {
-        return false;
-    }
-    const gid_t sudo_gid = sudo_group->gr_gid;
-    if (primary_gid == sudo_gid) {
-        return true;
-    }
-    const passwd* account = ::getpwuid(uid);
-    if (account == nullptr) {
-        return false;
-    }
-    int count = 16;
-    std::vector<gid_t> groups(static_cast<std::size_t>(count));
-    if (::getgrouplist(account->pw_name, account->pw_gid, groups.data(), &count) < 0) {
-        if (count <= 0 || count > 1024) {
-            return false;
-        }
-        groups.resize(static_cast<std::size_t>(count));
-        if (::getgrouplist(account->pw_name, account->pw_gid, groups.data(), &count) < 0) {
-            return false;
-        }
-    }
-    if (count <= 0 || count > static_cast<int>(groups.size())) {
-        return false;
-    }
-    for (int index = 0; index < count; ++index) {
-        if (groups[static_cast<std::size_t>(index)] == sudo_gid) {
-            return true;
-        }
-    }
-    return false;
 }
 
 struct DaemonState {
@@ -209,20 +175,7 @@ bool authorizeClient(int descriptor, uid_t& uid) {
         return false;
     }
     uid = credentials.uid;
-    return userBelongsToSudoGroup(credentials.uid, credentials.gid);
-}
-
-bool decodeCommand(std::uint32_t code, tunproxy::Command& command) {
-    if ((code >> 16U) != tunproxy::kIpcProtocolVersion) {
-        return false;
-    }
-    const std::uint32_t command_code = code & 0xffffU;
-    if (command_code < static_cast<std::uint32_t>(tunproxy::Command::On) ||
-        command_code > static_cast<std::uint32_t>(tunproxy::Command::Bypass)) {
-        return false;
-    }
-    command = static_cast<tunproxy::Command>(command_code);
-    return true;
+    return tunproxy::isAuthorizedUser(credentials.uid, credentials.gid, kAdminGroup);
 }
 
 void sendError(int descriptor, const tunproxy::Error& error) {
@@ -240,13 +193,13 @@ void serveClient(
         sendError(descriptor, request.error());
         return;
     }
-    tunproxy::Command command{};
-    if (request.value().type != tunproxy::IpcFrameType::Request ||
-        !decodeCommand(request.value().code, command)) {
+    const auto decoded = tunproxy::decodeCommand(request.value().code);
+    if (request.value().type != tunproxy::IpcFrameType::Request || !decoded.ok()) {
         sendError(descriptor, tunproxy::makeError(
             tunproxy::ErrorCode::InvalidArguments, "unsupported IPC protocol or command"));
         return;
     }
+    const tunproxy::Command command = decoded.value();
     std::unique_lock<std::mutex> operation_lock(daemon_state.operation, std::defer_lock);
     if (isMutating(command) && !operation_lock.try_lock()) {
         std::string active;
@@ -362,7 +315,7 @@ int main() {
             (void)::close(client);
             continue;
         }
-        timeval timeout{30, 0};
+        timeval timeout{static_cast<time_t>(tunproxy::kClientSocketTimeout.count()), 0};
         (void)::setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
         (void)::setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
         {

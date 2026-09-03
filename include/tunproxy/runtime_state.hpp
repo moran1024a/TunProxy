@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -47,7 +48,11 @@ public:
     FileLock(FileLock&& other) noexcept;
     FileLock& operator=(FileLock&& other) noexcept;
 
-    static Result<FileLock> acquire(const std::filesystem::path& path);
+    // Acquires an exclusive lock. When the lock is already held elsewhere,
+    // on_wait is invoked once before blocking.
+    static Result<FileLock> acquire(
+        const std::filesystem::path& path,
+        const std::function<void()>& on_wait = {});
 
 private:
     explicit FileLock(int descriptor) : descriptor_(descriptor) {}

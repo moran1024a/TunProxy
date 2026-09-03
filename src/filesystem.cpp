@@ -1,5 +1,6 @@
 #include "tunproxy/filesystem.hpp"
 
+#include "tunproxy/constants.hpp"
 #include "tunproxy/process.hpp"
 
 #include <fcntl.h>
@@ -96,7 +97,7 @@ Result<void> writeFileAtomic(
 Result<std::string> sha256File(
     const std::filesystem::path& path,
     const std::filesystem::path& sha256sum) {
-    const auto result = runCapture({sha256sum.string(), "--", path.string()}, std::chrono::seconds(30));
+    const auto result = runCapture({sha256sum.string(), "--", path.string()}, kSha256Timeout);
     if (!result.ok()) {
         return Result<std::string>::failure(result.error());
     }

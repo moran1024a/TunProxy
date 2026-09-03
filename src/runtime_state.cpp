@@ -205,7 +205,8 @@ FileLock& FileLock::operator=(FileLock&& other) noexcept {
     return *this;
 }
 
-Result<FileLock> FileLock::acquire(const std::filesystem::path& path) {
+Result<FileLock> FileLock::acquire(
+    const std::filesystem::path& path, const std::function<void()>& on_wait) {
     const auto directory = ensureDirectory(path.parent_path(), 0755);
     if (!directory.ok()) {
         return Result<FileLock>::failure(directory.error());
@@ -214,7 +215,16 @@ Result<FileLock> FileLock::acquire(const std::filesystem::path& path) {
     if (descriptor < 0) {
         return Result<FileLock>::failure(makeError(ErrorCode::StateError, "cannot open operation lock"));
     }
-    if (::flock(descriptor, LOCK_EX) != 0) {
+    if (::flock(descriptor, LOCK_EX | LOCK_NB) == 0) {
+        return Result<FileLock>::success(FileLock(descriptor));
+    }
+    if (errno == EWOULDBLOCK && on_wait) {
+        on_wait();
+    }
+    while (::flock(descriptor, LOCK_EX) != 0) {
+        if (errno == EINTR) {
+            continue;
+        }
         (void)::close(descriptor);
         return Result<FileLock>::failure(makeError(ErrorCode::StateError, "cannot acquire operation lock"));
     }

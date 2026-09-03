@@ -16,6 +16,7 @@ TunProxy 不管理代理节点、订阅或路由规则，也不修改 `HTTP_PROX
 - 强制绕过实际连接的 SOCKS5 上游地址，避免上游连接被 TUN 再次捕获。
 - `auto_redirect` 失败时自动回退到普通 TUN 路由模式。
 - 原子配置写入、文件锁、PID 启动时间校验和安全停止。
+- 结果只写标准输出，日志只写标准错误，便于脚本处理。
 - 只发布 Debian 包，仓库不包含 sing-box 二进制。
 
 ## 兼容性
@@ -35,8 +36,8 @@ TunProxy 不管理代理节点、订阅或路由规则，也不修改 `HTTP_PROX
 下载与系统架构匹配的 amd64 deb，并核对发布说明中给出的 SHA-256：
 
 ```bash
-sha256sum ./tunproxy_0.3.0.rc2_amd64.deb
-sudo apt install ./tunproxy_0.3.0.rc2_amd64.deb
+sha256sum ./tunproxy_0.3.1_amd64.deb
+sudo apt install ./tunproxy_0.3.1_amd64.deb
 ```
 
 推荐使用 `apt install` 安装本地包，以便同时处理依赖。文件名前的 `./` 不能省略；从其他目录安装时应使用 deb 的绝对路径。
@@ -56,8 +57,8 @@ tunproxy status
 无需卸载旧版本，也不要在更新前执行 `apt remove` 或 `apt purge`。下载新版本 deb、核对 SHA-256，然后直接覆盖安装：
 
 ```bash
-sha256sum ./tunproxy_0.3.0.rc2_amd64.deb
-sudo apt install ./tunproxy_0.3.0.rc2_amd64.deb
+sha256sum ./tunproxy_0.3.1_amd64.deb
+sudo apt install ./tunproxy_0.3.1_amd64.deb
 tunproxy --version
 tunproxy status
 ```
@@ -81,7 +82,7 @@ tunproxy on
 更新期间网络代理会短暂中断。如果旧实例不能安全停止，包管理操作会失败并保留持久配置与核心，不会继续进行不完整替换。重复安装相同版本用于修复本地安装时，可以执行：
 
 ```bash
-sudo apt install --reinstall ./tunproxy_0.3.0.rc2_amd64.deb
+sudo apt install --reinstall ./tunproxy_0.3.1_amd64.deb
 ```
 
 不支持通过直接安装较低版本进行配置降级。确需回退时，应先备份 `/etc/tunproxy/config`，并按目标版本的发布说明处理兼容性。
@@ -174,28 +175,30 @@ tunproxy bypass
 tunproxy off
 ```
 
-`on` 和 `off` 会实时输出阶段日志。首次启用时，如果 sing-box 不存在或校验失败，会显示原因、下载重试、curl 下载进度条、归档 SHA-256、二进制版本/revision 校验、配置检查、进程启动和 TUN 接口就绪状态；已安装且校验通过时会跳过下载并明确提示。连接上游失败、TUN 不可用或 sing-box 启动失败时，错误会立即输出，不会长时间无信息等待。
+命令结果只写标准输出，每行一个 `键: 值`；日志、下载进度条和警告只写标准错误，脚本可以单独解析标准输出。内核已安装且校验通过时，`on` 不输出任何日志，直接给出结果块。
 
-典型输出：
+`on` 与 `status` 处于 `ON` 时的输出相同：
 
 ```text
-[INFO] Starting TunProxy...
-[INFO] Checking SOCKS5 upstream socks5://192.168.1.20:7890...
-[INFO] Upstream connection succeeded via 192.168.1.20
-[INFO] sing-box 1.13.18 is installed and checksum verified
-[INFO] sing-box configuration is valid
-[INFO] sing-box process started (PID 1234)
-[INFO] TUN interface tunproxy0 is ready
-TunProxy: ON
-Upstream: socks5://192.168.1.20:7890
+Status: ON
+Upstream: socks5://192.168.1.20:7890 (192.168.1.20)
 Core: sing-box 1.13.18
-Mode: TUN
+PID: 1234
 Routing: auto-redirect
-Bypass: fixed + upstream host + interface hosts (13 effective CIDRs)
-Upstream bypass: 192.168.1.20
+Bypass: 13 CIDRs
 ```
 
-进度条写入标准错误，阶段日志写入标准输出；脚本可以分别重定向两类输出。sing-box 自身运行日志仍位于：
+括号内是本次实际选中并钉住的上游地址。`Routing` 为 `auto-redirect` 表示内核接受了 sing-box 的 auto_redirect 模式，为 `tun-route` 表示已回退到普通 TUN 路由。代理关闭时 `status` 输出：
+
+```text
+Status: OFF
+Upstream: socks5://192.168.1.20:7890
+Core: sing-box 1.13.18
+```
+
+内核尚未下载时 `Core` 一行显示 `not installed`。
+
+首次启用会在标准错误输出下载进度和 `sing-box 1.13.18 installed`；内核校验失败、auto_redirect 回退、停止时需要 SIGKILL 等情况会输出以 `warning:` 开头的一行。连接上游失败、TUN 不可用或 sing-box 启动失败时，错误以 `error:` 开头立即输出。sing-box 自身运行日志位于：
 
 ```text
 /run/tunproxy/sing-box.log
@@ -205,13 +208,13 @@ Upstream bypass: 192.168.1.20
 
 ### 内网绕过策略
 
-内网绕过是固定的内部安全策略，不写入用户配置，也不提供关闭或恢复旧行为的开关。执行以下只读命令可以查看当前状态、实际生效的 CIDR、上游绕过地址和规则顺序：
+内网绕过是固定的内部安全策略，不写入用户配置，也不提供关闭或恢复旧行为的开关。执行以下只读命令可以列出实际生效的 CIDR：
 
 ```bash
 tunproxy bypass
 ```
 
-代理处于 `ON` 时，命令显示本次启动前锁定并正在使用的策略；代理处于 `OFF` 时，显示基于当前网络环境生成的预览，上游地址会在下一次 `on` 完成解析和连通性校验后加入。
+代理处于 `ON` 时，首行为 `Bypass: active, N CIDRs`，随后一行 `Upstream:` 给出钉住的上游主机 CIDR，再逐行列出全部 CIDR。代理处于 `OFF` 时，首行为 `Bypass: preview, N CIDRs`，列表基于当前网络环境生成，上游地址会在下一次 `on` 完成解析和连通性校验后加入。
 
 固定绕过范围：
 
@@ -263,10 +266,33 @@ ctest --test-dir build --output-on-failure
 
 ```bash
 dpkg-buildpackage -b -us -uc
-lintian --fail-on error '../tunproxy_0.3.0~rc2_amd64.deb'
+lintian --fail-on error ../tunproxy_0.3.1_amd64.deb
 ```
 
-正式发布使用 Ubuntu 22.04 构建 amd64 包。发布前应在 Ubuntu 22.04 和 24.04 上执行全新安装、覆盖更新、卸载和 TUN 往返测试。仓库不使用 GitHub Actions，构建与发布均在本地完成。
+单元测试不联网，不需要 root，也不会创建 TUN 接口。真实内核的集成测试通过脚本按需运行，脚本会下载并校验固定版本的 sing-box 归档，然后用它验证生成的配置并演练 repair 流程：
+
+```bash
+tools/run-integration-tests.sh build
+```
+
+### 维护脚本
+
+| 脚本 | 用途 |
+| --- | --- |
+| `tools/update-core-manifest.sh <version>` | 下载指定版本的官方归档，计算大小和 SHA-256，读取 revision，重写 `include/tunproxy/core_manifest.hpp`，并列出仍引用旧版本号的文档 |
+| `tools/run-integration-tests.sh [build-dir]` | 下载并校验固定内核后运行全部测试，包括依赖真实内核的集成用例 |
+
+版本号只在 `debian/changelog` 首行维护，CMake 从中生成 `version.hpp` 和 man page 头部。
+
+### 发布前清单
+
+正式发布使用 Ubuntu 22.04 构建 amd64 包。仓库不使用 GitHub Actions，构建与发布均在本地完成，发布前应完成：
+
+1. `cmake --build` 零警告，`ctest` 全部通过。
+2. `tools/run-integration-tests.sh` 通过。
+3. `dpkg-buildpackage -b -us -uc` 与 `lintian --fail-on error` 通过。
+4. 在 Ubuntu 22.04 和 24.04 上执行全新安装、覆盖更新、卸载。
+5. 安装后在真实系统上执行 `tunproxy on`、TUN 往返访问、`tunproxy off`，确认 `tunproxy.service` 的 seccomp 过滤和其他加固项不影响 sing-box 运行。
 
 ## sing-box 内核
 
@@ -340,7 +366,7 @@ Filesystem          原子文件写入、SHA-256 和安全目录创建
 - 核心启动使用 `O_NOFOLLOW`、已打开文件描述符和 `fexecve()`。
 - `/var/cache/tunproxy` 使用 0700，核心目录不加入用户 `PATH`。
 - Socket 使用 `root:sudo 0660` 权限并通过 `SO_PEERCRED` 再次验证调用者。
-- daemon 由 systemd 限制能力、设备、地址族和可写路径；下载及校验子进程会清除网络 capabilities。
+- daemon 由 systemd 限制能力、设备、地址族、系统调用、命名空间和可写路径；下载及校验子进程会清除网络 capabilities。
 - deb 安装阶段不联网，核心下载发生在显式 `tunproxy on` 操作中。
 
 ## 限制
@@ -354,11 +380,12 @@ Filesystem          原子文件写入、SHA-256 和安全目录创建
 ## 目录结构
 
 ```text
-include/tunproxy/   公共 C++ 接口和数据结构
-src/                核心实现和 CLI 入口
-tests/              单元、进程、配置和 sing-box repair 测试
+include/tunproxy/   公共 C++ 接口、常量和数据结构
+src/                核心实现、CLI 和 daemon 入口
+tests/              按模块拆分的测试用例、测试框架和假内核
+tools/              内核清单更新与集成测试脚本
 debian/             Debian 控制文件和维护脚本
-docs/               man page
+docs/               man page 模板
 ```
 
 ## 许可证

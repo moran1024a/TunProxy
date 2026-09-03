@@ -1,0 +1,10 @@
+#pragma once
+
+#include <string_view>
+
+namespace tunproxy {
+
+// Generated from debian/changelog by CMake. Do not edit the generated file.
+inline constexpr std::string_view kTunProxyVersion = "@TUNPROXY_VERSION_STRING@";
+
+} // namespace tunproxy

@@ -1,5 +1,7 @@
 #include "tunproxy/bypass_policy.hpp"
 
+#include "tunproxy/constants.hpp"
+
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <net/if.h>
@@ -13,8 +15,6 @@
 
 namespace tunproxy {
 namespace {
-
-constexpr std::size_t kMaximumInterfaceCidrs = 1024;
 
 struct BinaryCidr {
     int family{AF_UNSPEC};
@@ -80,12 +80,11 @@ bool overlapsTunAddressSpace(const BinaryCidr& cidr) {
     if (cidr.family != AF_INET) {
         return false;
     }
-    const std::array<unsigned char, 2> reserved{198U, 18U};
-    const unsigned int shared_prefix = std::min(cidr.prefix, 15U);
+    const unsigned int shared_prefix = std::min(cidr.prefix, kTunAddressSpacePrefixBits);
     for (unsigned int bit = 0; bit < shared_prefix; ++bit) {
         const unsigned int shift = 7U - (bit % 8U);
         const unsigned int left = (cidr.address[bit / 8U] >> shift) & 1U;
-        const unsigned int right = (reserved[bit / 8U] >> shift) & 1U;
+        const unsigned int right = (kTunAddressSpacePrefix[bit / 8U] >> shift) & 1U;
         if (left != right) {
             return false;
         }
@@ -134,7 +133,8 @@ Result<void> appendInterfaceAddress(
         if (output.size() >= kMaximumInterfaceCidrs) {
             return Result<void>::failure(makeError(
                 ErrorCode::StateError,
-                "more than 1024 active interface addresses were detected; refusing an incomplete bypass policy"));
+                "more than " + std::to_string(kMaximumInterfaceCidrs) +
+                    " active interface addresses were detected; refusing an incomplete bypass policy"));
         }
         output.push_back(formatted);
     }
@@ -142,7 +142,7 @@ Result<void> appendInterfaceAddress(
 }
 
 Result<void> collectInterfaceAddresses(
-    std::vector<std::string>& output, std::set<std::string>& seen) {
+    std::vector<std::string>& output, std::set<std::string>& seen, std::string_view excluded_interface) {
     ifaddrs* raw_interfaces = nullptr;
     if (::getifaddrs(&raw_interfaces) != 0) {
         return Result<void>::failure(makeError(
@@ -152,7 +152,7 @@ Result<void> collectInterfaceAddresses(
     for (const ifaddrs* current = raw_interfaces; current != nullptr; current = current->ifa_next) {
         if (current->ifa_addr == nullptr || current->ifa_name == nullptr ||
             (current->ifa_flags & IFF_UP) == 0U ||
-            std::string_view(current->ifa_name) == "tunproxy0" ||
+            std::string_view(current->ifa_name) == excluded_interface ||
             (current->ifa_addr->sa_family != AF_INET && current->ifa_addr->sa_family != AF_INET6)) {
             continue;
         }
@@ -265,11 +265,12 @@ std::vector<std::string> BypassPolicy::allCidrs() const {
     return output;
 }
 
-Result<BypassPolicy> collectBypassPolicy(std::string_view upstream_address) {
+Result<BypassPolicy> collectBypassPolicy(
+    std::string_view upstream_address, std::string_view excluded_interface) {
     BypassPolicy policy;
     policy.fixed_cidrs = fixedBypassCidrs();
     std::set<std::string> seen(policy.fixed_cidrs.begin(), policy.fixed_cidrs.end());
-    const auto interfaces = collectInterfaceAddresses(policy.interface_cidrs, seen);
+    const auto interfaces = collectInterfaceAddresses(policy.interface_cidrs, seen, excluded_interface);
     if (!interfaces.ok()) {
         return Result<BypassPolicy>::failure(interfaces.error());
     }

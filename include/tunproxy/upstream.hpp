@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tunproxy/config.hpp"
+#include "tunproxy/constants.hpp"
 #include "tunproxy/result.hpp"
 
 #include <chrono>
@@ -15,6 +16,6 @@ struct ResolvedUpstream {
 
 Result<ResolvedUpstream> resolveAndProbeUpstream(
     const Upstream& upstream,
-    std::chrono::milliseconds timeout = std::chrono::seconds(3));
+    std::chrono::milliseconds timeout = kUpstreamProbeTimeout);
 
 } // namespace tunproxy

@@ -1,3 +1,22 @@
+tunproxy (0.3.1) unstable; urgency=medium
+
+  * Derive the version from debian/changelog and generate version.hpp and the
+    man page from it.
+  * Print only key/value result lines on stdout; send logs to stderr and drop
+    stage messages that carry no decision.
+  * Move routing order and bypass policy explanations from the CLI to the man
+    page and README.
+  * Centralize interface, address, DNS, and timeout constants.
+  * Remove stale core staging directories and partial downloads before repair.
+  * Add a seccomp system-call filter and namespace, clock, and hostname
+    protections to tunproxy.service.
+  * Rebuild the test suite as independent cases with a fake core binary; add
+    negative tests for upstream, config, IPC, authorization, and the
+    auto-redirect fallback.
+  * Add tools/update-core-manifest.sh and tools/run-integration-tests.sh.
+
+ -- TunProxy Maintainers <maintainers@tunproxy.invalid>  Fri, 04 Sep 2026 12:00:00 +0800
+
 tunproxy (0.3.0~rc2) unstable; urgency=medium
 
   * Stop importing arbitrary non-default unicast routes into the bypass policy.

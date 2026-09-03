@@ -1,5 +1,6 @@
 #include "tunproxy/core_manager.hpp"
 
+#include "tunproxy/constants.hpp"
 #include "tunproxy/filesystem.hpp"
 #include "tunproxy/process.hpp"
 
@@ -67,6 +68,39 @@ Result<void> renameReplacing(
     return Result<void>::success();
 }
 
+bool startsWith(const std::string& text, const std::string& prefix) {
+    return text.compare(0, prefix.size(), prefix) == 0;
+}
+
+// Removes leftovers of interrupted repairs. Symbolic links are never followed:
+// only real directories and regular files matching the expected names go.
+void removeStaleArtifacts(
+    const std::filesystem::path& directory,
+    const std::string& prefix,
+    std::filesystem::file_type expected_type) {
+    std::error_code error;
+    std::filesystem::directory_iterator entries(directory, error);
+    if (error) {
+        return;
+    }
+    for (const auto& entry : entries) {
+        if (!startsWith(entry.path().filename().string(), prefix)) {
+            continue;
+        }
+        std::error_code status_error;
+        const auto status = entry.symlink_status(status_error);
+        if (status_error || status.type() != expected_type) {
+            continue;
+        }
+        std::error_code remove_error;
+        if (expected_type == std::filesystem::file_type::directory) {
+            std::filesystem::remove_all(entry.path(), remove_error);
+        } else {
+            std::filesystem::remove(entry.path(), remove_error);
+        }
+    }
+}
+
 } // namespace
 
 CoreManager::CoreManager(AppPaths paths, CoreReleaseManifest manifest, LogCallback logger)
@@ -97,7 +131,7 @@ Result<CoreInfo> CoreManager::verifyCandidate(const std::filesystem::path& execu
 
     const auto version = runCapture(
         {executable.string(), "version"},
-        std::chrono::seconds(10));
+        kCoreVersionTimeout);
     if (!version.ok() || version.value().exit_code != 0) {
         return Result<CoreInfo>::failure(makeError(
             ErrorCode::CoreVerificationFailure,
@@ -131,22 +165,15 @@ Result<CoreInfo> CoreManager::verifyInstalledCore() const {
 Result<CoreInfo> CoreManager::ensureCore() {
     const auto installed = verifyInstalledCore();
     if (installed.ok()) {
-        emitLog(logger_, LogLevel::Info,
-            "sing-box " + std::string(manifest_.version) +
-            " is installed and checksum verified");
         return installed;
     }
     emitLog(logger_, LogLevel::Warning,
         "sing-box " + std::string(manifest_.version) +
-        " is missing or failed verification: " + installed.error().message);
-    emitLog(logger_, LogLevel::Info,
-        "Preparing to download and verify sing-box " + std::string(manifest_.version));
+        " missing or failed verification: " + installed.error().message);
     return repairCore();
 }
 
 Result<CoreInfo> CoreManager::repairCore() {
-    emitLog(logger_, LogLevel::Info,
-        "sing-box archive: " + std::string(manifest_.asset_name));
     const auto cache_directory = ensureDirectory(paths_.cache_dir, 0700);
     if (!cache_directory.ok()) {
         return Result<CoreInfo>::failure(cache_directory.error());
@@ -160,18 +187,15 @@ Result<CoreInfo> CoreManager::repairCore() {
         return Result<CoreInfo>::failure(version_directory.error());
     }
 
+    // The caller holds the operation lock, so leftovers cannot belong to a
+    // concurrent repair.
+    removeStaleArtifacts(coreDirectory(), ".staging.", std::filesystem::file_type::directory);
+    removeStaleArtifacts(
+        paths_.cache_dir, std::string(manifest_.asset_name) + ".part.", std::filesystem::file_type::regular);
+
     const std::string suffix = std::to_string(static_cast<long long>(::getpid()));
     const auto archive = paths_.cache_dir / (std::string(manifest_.asset_name) + ".part." + suffix);
     const auto staging = coreDirectory() / (".staging." + suffix);
-    struct stat existing_staging {};
-    if (::lstat(staging.c_str(), &existing_staging) == 0) {
-        return Result<CoreInfo>::failure(makeError(
-            ErrorCode::CoreDownloadFailure, "core staging path already exists"));
-    }
-    if (errno != ENOENT) {
-        return Result<CoreInfo>::failure(makeError(
-            ErrorCode::CoreDownloadFailure, "cannot inspect core staging path"));
-    }
     if (::mkdir(staging.c_str(), 0700) != 0) {
         return Result<CoreInfo>::failure(makeError(
             ErrorCode::CoreDownloadFailure, "cannot create core staging directory"));
@@ -181,9 +205,12 @@ Result<CoreInfo> CoreManager::repairCore() {
 
     Result<ProcessOutput> download = Result<ProcessOutput>::failure(
         makeError(ErrorCode::CoreDownloadFailure, "download not attempted"));
-    for (int attempt = 0; attempt < 3; ++attempt) {
+    for (int attempt = 0; attempt < kDownloadAttempts; ++attempt) {
         emitLog(logger_, LogLevel::Info,
-            "Downloading sing-box (attempt " + std::to_string(attempt + 1) + "/3)...");
+            "Downloading sing-box " + std::string(manifest_.version) +
+            (attempt == 0
+                ? std::string{}
+                : " (attempt " + std::to_string(attempt + 1) + "/" + std::to_string(kDownloadAttempts) + ")"));
         std::error_code ignored;
         std::filesystem::remove(archive, ignored);
         download = runCapture({
@@ -195,28 +222,24 @@ Result<CoreInfo> CoreManager::repairCore() {
             "=https",
             "--tlsv1.2",
             "--connect-timeout",
-            "15",
+            std::to_string(kDownloadConnectTimeout.count()),
             "--max-time",
-            "600",
+            std::to_string(kDownloadMaxTime.count()),
             "--output",
             archive.string(),
             std::string(manifest_.download_url),
-        }, std::chrono::seconds(620), [this](ProcessStream stream, std::string_view chunk) {
+        }, kDownloadProcessTimeout, [this](ProcessStream stream, std::string_view chunk) {
             if (stream == ProcessStream::Stderr) {
                 emitLog(logger_, LogLevel::Progress, std::string(chunk));
             }
         });
         emitLog(logger_, LogLevel::Progress, "\n");
         if (download.ok() && download.value().exit_code == 0) {
-            emitLog(logger_, LogLevel::Info, "sing-box download completed");
             break;
         }
-        const std::string detail = processFailureDetail(download);
-        emitLog(logger_, LogLevel::Warning,
-            "sing-box download attempt failed: " + detail);
-        if (attempt < 2) {
-            emitLog(logger_, LogLevel::Info, "Retrying sing-box download in 1 second...");
-            std::this_thread::sleep_for(std::chrono::seconds(1));
+        emitLog(logger_, LogLevel::Warning, "download failed: " + processFailureDetail(download));
+        if (attempt + 1 < kDownloadAttempts) {
+            std::this_thread::sleep_for(kDownloadRetryDelay);
         }
     }
     if (!download.ok() || download.value().exit_code != 0) {
@@ -232,18 +255,12 @@ Result<CoreInfo> CoreManager::repairCore() {
             ErrorCode::CoreVerificationFailure,
             "sing-box archive size mismatch"));
     }
-    emitLog(logger_, LogLevel::Info,
-        "Downloaded archive size verified: " + std::to_string(archive_size.value()) + " bytes");
-    emitLog(logger_, LogLevel::Info, "Verifying sing-box archive SHA-256...");
     const auto archive_hash = sha256File(archive, paths_.sha256sum_executable);
     if (!archive_hash.ok() || archive_hash.value() != manifest_.archive_sha256) {
         return Result<CoreInfo>::failure(makeError(
             ErrorCode::CoreVerificationFailure,
             "sing-box archive checksum mismatch"));
     }
-    emitLog(logger_, LogLevel::Info, "sing-box archive SHA-256 verified");
-
-    emitLog(logger_, LogLevel::Info, "Extracting verified sing-box archive...");
     const auto extract = runCapture({
         paths_.tar_executable.string(),
         "--extract",
@@ -258,7 +275,7 @@ Result<CoreInfo> CoreManager::repairCore() {
         "--",
         std::string(manifest_.binary_member),
         std::string(manifest_.license_member),
-    }, std::chrono::seconds(60));
+    }, kExtractTimeout);
     if (!extract.ok() || extract.value().exit_code != 0) {
         const std::string detail = extract.ok() ? extract.value().stderr_text : extract.error().message;
         return Result<CoreInfo>::failure(makeError(
@@ -276,15 +293,12 @@ Result<CoreInfo> CoreManager::repairCore() {
     if (!verified.ok()) {
         return verified;
     }
-    emitLog(logger_, LogLevel::Info, "sing-box executable version and checksum verified");
     const auto license_hash = sha256File(staging / "LICENSE", paths_.sha256sum_executable);
     if (!license_hash.ok() || license_hash.value() != manifest_.license_sha256) {
         return Result<CoreInfo>::failure(makeError(
             ErrorCode::CoreVerificationFailure,
             "sing-box license checksum mismatch"));
     }
-    emitLog(logger_, LogLevel::Info, "sing-box license checksum verified");
-
     const auto installed_license = renameReplacing(staging / "LICENSE", coreDirectory() / "LICENSE");
     if (!installed_license.ok()) {
         return Result<CoreInfo>::failure(installed_license.error());
@@ -293,8 +307,7 @@ Result<CoreInfo> CoreManager::repairCore() {
     if (!installed.ok()) {
         return Result<CoreInfo>::failure(installed.error());
     }
-    emitLog(logger_, LogLevel::Info,
-        "sing-box " + std::string(manifest_.version) + " installed successfully");
+    emitLog(logger_, LogLevel::Info, "sing-box " + std::string(manifest_.version) + " installed");
     return verifyInstalledCore();
 }
 

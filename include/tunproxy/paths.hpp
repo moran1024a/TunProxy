@@ -1,6 +1,9 @@
 #pragma once
 
+#include "tunproxy/constants.hpp"
+
 #include <filesystem>
+#include <string>
 
 namespace tunproxy {
 
@@ -15,6 +18,9 @@ struct AppPaths {
     std::filesystem::path curl_executable{"/usr/bin/curl"};
     std::filesystem::path tar_executable{"/usr/bin/tar"};
     std::filesystem::path sha256sum_executable{"/usr/bin/sha256sum"};
+    // Name of the managed TUN interface. Tests inject a name that does not
+    // exist so they never observe or disturb a live instance.
+    std::string tun_interface{kTunInterfaceName};
 
     [[nodiscard]] std::filesystem::path lock_file() const {
         return runtime_dir / "lock";
@@ -26,6 +32,14 @@ struct AppPaths {
 
     [[nodiscard]] std::filesystem::path control_socket() const {
         return runtime_dir / "control.sock";
+    }
+
+    [[nodiscard]] std::filesystem::path core_config_file() const {
+        return runtime_dir / std::string(kCoreConfigFileName);
+    }
+
+    [[nodiscard]] std::filesystem::path core_log_file() const {
+        return runtime_dir / std::string(kCoreLogFileName);
     }
 };
 

@@ -31,6 +31,9 @@ constexpr std::uint32_t encodeCommand(Command command) {
     return (kIpcProtocolVersion << 16U) | static_cast<std::uint32_t>(command);
 }
 
+// Rejects codes carrying a different protocol version or an unknown command.
+Result<Command> decodeCommand(std::uint32_t code);
+
 struct IpcFrame {
     IpcFrameType type{IpcFrameType::Error};
     std::uint32_t code{0};

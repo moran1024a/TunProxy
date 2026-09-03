@@ -1,5 +1,6 @@
 #include "tunproxy/config.hpp"
 #include "tunproxy/controller.hpp"
+#include "tunproxy/core_manifest.hpp"
 #include "tunproxy/ipc.hpp"
 #include "tunproxy/log.hpp"
 #include "tunproxy/paths.hpp"
@@ -15,22 +16,24 @@
 namespace {
 
 int printError(const tunproxy::Error& error) {
-    std::cerr << "Error: " << error.message << '\n';
+    std::cerr << "error: " << error.message << '\n';
     return static_cast<int>(error.code);
 }
 
 void printUsage() {
-    std::cout << "Usage: tunproxy [--direct] <on|off|status|bypass|setting> [socks5://host:port]\n";
+    std::cerr << "Usage: tunproxy [--direct] <on|off|status|bypass|setting> [socks5://host:port]\n";
 }
 
+// Logs go to stderr so stdout carries only the result block.
 void printLog(tunproxy::LogLevel level, std::string_view message) {
     if (level == tunproxy::LogLevel::Progress) {
         std::cerr << message << std::flush;
         return;
     }
-    std::ostream& output = level == tunproxy::LogLevel::Warning ? std::cerr : std::cout;
-    output << (level == tunproxy::LogLevel::Warning ? "[WARN] " : "[INFO] ")
-           << message << '\n' << std::flush;
+    if (level == tunproxy::LogLevel::Warning) {
+        std::cerr << "warning: ";
+    }
+    std::cerr << message << '\n' << std::flush;
 }
 
 tunproxy::Result<std::string> executeRemote(
@@ -98,17 +101,13 @@ int interactiveSetting(bool direct, const tunproxy::AppPaths& paths) {
         return printError(parsed.error());
     }
     tunproxy::Upstream updated = parsed.value();
-    std::cout << "Current upstream:\n"
-              << "  Protocol: " << updated.protocol << '\n'
-              << "  Host:     " << updated.host << '\n'
-              << "  Port:     " << updated.port << "\n\n";
     std::string input;
-    std::cout << "New host [" << updated.host << "]: " << std::flush;
+    std::cout << "Host [" << updated.host << "]: " << std::flush;
     std::getline(std::cin, input);
     if (!input.empty()) {
         updated.host = input;
     }
-    std::cout << "New port [" << updated.port << "]: " << std::flush;
+    std::cout << "Port [" << updated.port << "]: " << std::flush;
     std::getline(std::cin, input);
     if (!input.empty()) {
         const auto with_port = tunproxy::parseUpstreamUri(
@@ -135,7 +134,7 @@ int main(int argc, char** argv) {
     (void)::signal(SIGPIPE, SIG_IGN);
     if (argc == 2 && (std::string(argv[1]) == "--version" || std::string(argv[1]) == "version")) {
         std::cout << "TunProxy " << tunproxy::kTunProxyVersion << '\n'
-                  << "Managed core: sing-box 1.13.18\n";
+                  << "Managed core: sing-box " << tunproxy::kSingBoxRelease.version << '\n';
         return 0;
     }
     bool direct = false;

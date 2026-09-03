@@ -57,14 +57,16 @@ Result<std::string> buildSingBoxConfig(const SingBoxRuntimeConfig& config) {
          << jsonEscape(config.log_file.string()) << "\"},\n"
          << "  \"dns\": {\n"
          << "    \"servers\": [{\"type\": \"https\", \"tag\": \"proxy-doh\", "
-            "\"server\": \"1.1.1.1\", \"server_port\": 443, \"path\": \"/dns-query\", "
-            "\"tls\": {\"enabled\": true, \"server_name\": \"cloudflare-dns.com\"}, "
+            "\"server\": \"" << kDnsServerAddress << "\", \"server_port\": " << kDnsServerPort
+         << ", \"path\": \"" << kDnsServerPath << "\", "
+            "\"tls\": {\"enabled\": true, \"server_name\": \"" << kDnsServerName << "\"}, "
             "\"detour\": \"proxy\"}],\n"
          << "    \"final\": \"proxy-doh\", \"strategy\": \"prefer_ipv4\"\n"
          << "  },\n"
          << "  \"inbounds\": [{\n"
-         << "    \"type\": \"tun\", \"tag\": \"tun-in\", \"interface_name\": \"tunproxy0\",\n"
-         << "    \"address\": [\"198.18.0.1/30\"], \"mtu\": 1500, \"auto_route\": true,\n"
+         << "    \"type\": \"tun\", \"tag\": \"tun-in\", \"interface_name\": \""
+         << jsonEscape(config.interface_name) << "\",\n"
+         << "    \"address\": [\"" << kTunAddress << "\"], \"mtu\": " << kTunMtu << ", \"auto_route\": true,\n"
          << "    \"auto_redirect\": " << (config.auto_redirect ? "true" : "false")
          << ", \"strict_route\": true, \"stack\": \"system\",\n"
          << "    \"route_exclude_address\": ";

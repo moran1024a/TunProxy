@@ -1,0 +1,138 @@
+.TH TUNPROXY 8 "September 2026" "TunProxy @TUNPROXY_VERSION_STRING@" "System Administration"
+.SH NAME
+tunproxy \- manage a transparent TUN proxy through a pinned sing-box core
+.SH SYNOPSIS
+.B tunproxy
+.RI [ --direct ]
+.RI { on | off | status | bypass | setting }
+.RI [ socks5://host:port ]
+.br
+.B tunproxy --version
+.SH DESCRIPTION
+.B tunproxy
+creates a system TUN interface and forwards TCP traffic to a configured SOCKS5
+upstream. The command-line client talks to a root-owned local daemon, so
+members of the sudo group do not need sudo for normal commands. It does not use
+shell proxy environment variables and does not manage proxy nodes or
+subscriptions.
+.SH COMMANDS
+.TP
+.B on
+Verify or repair the managed core, probe the upstream, and enable the TUN.
+Prints the same result block as
+.BR status .
+.TP
+.B off
+Stop the managed core and remove its runtime state.
+.TP
+.B status
+Show the current state, upstream, managed core, PID, routing mode, and the
+number of bypassed CIDRs.
+.TP
+.B bypass
+List the effective bypass CIDRs. While the proxy is on, the list is the policy
+pinned at startup; otherwise it is a preview computed from the current network.
+.TP
+.B setting
+Show or update the SOCKS5 upstream. Without an argument the command prompts
+for host and port.
+.TP
+.B --version
+Show the installed TunProxy version and managed sing-box version.
+.TP
+.B --direct
+Bypass the daemon for recovery on systems where the control service is
+unavailable. This mode requires root privileges.
+.SH OUTPUT
+Standard output carries only the result block, one
+.I Key: value
+pair per line. Progress and warnings go to standard error, so scripts can
+parse standard output on its own. When the core is already installed and
+verified,
+.B on
+prints no log lines at all.
+.PP
+Example result block:
+.PP
+.nf
+Status: ON
+Upstream: socks5://192.168.1.20:7890 (192.168.1.20)
+Core: sing-box 1.13.18
+PID: 1234
+Routing: auto-redirect
+Bypass: 13 CIDRs
+.fi
+.PP
+.I Routing
+is
+.B auto-redirect
+when the kernel accepted the sing-box auto_redirect mode and
+.B tun-route
+when TunProxy fell back to plain TUN routing.
+.SH FILES
+.TP
+.I /etc/tunproxy/config
+User configuration.
+.TP
+.I /var/lib/tunproxy/cores/1.13.18/sing-box
+Verified private sing-box executable.
+.TP
+.I /run/tunproxy/
+Runtime configuration, state, lock, and log files.
+.TP
+.I /run/tunproxy/control.sock
+Local control socket. Access is limited to root and members of the sudo group.
+.TP
+.I /var/cache/tunproxy/
+Temporary sing-box archives. The download progress bar is printed to standard
+error while an archive is being fetched.
+.SH INSTALLATION
+Install the local Debian package with
+.BR "sudo apt install ./tunproxy_VERSION_amd64.deb" .
+Using apt is recommended so package dependencies are resolved. Installation
+enables only
+.BR tunproxy.socket .
+It does not enable the proxy, create a TUN interface, start sing-box, or modify
+routes.
+.SH UPDATE
+Install a newer Debian package directly over the installed version with
+.BR "sudo apt install ./tunproxy_VERSION_amd64.deb" .
+Do not remove or purge the old package first. The update safely stops an active
+proxy and preserves
+.IR /etc/tunproxy/config ,
+verified cores under
+.IR /var/lib/tunproxy/cores/ ,
+and the download cache. The proxy remains off after the update until the user
+explicitly runs
+.BR "tunproxy on" .
+Use
+.B apt install --reinstall
+to repair an installation with the same package version.
+.SH LIMITATIONS
+The current release proxies TCP traffic. DNS is sent through DNS-over-HTTPS via
+the SOCKS5 upstream. UDP traffic to local and bypassed networks is direct; other
+non-DNS UDP traffic is rejected.
+.SH BYPASS POLICY
+The bypass policy is fixed and cannot be disabled or changed through user
+configuration. It always excludes loopback, private, carrier-grade NAT,
+link-local, unique-local, multicast, and broadcast ranges. Before enabling the
+TUN, TunProxy adds host routes only for addresses assigned to active
+interfaces. The IP address selected for the SOCKS5 upstream is always added as
+a direct host route. Arbitrary kernel routes are not imported.
+.PP
+Traffic is matched in this order:
+.IP 1. 4
+Selected SOCKS5 upstream address: direct.
+.IP 2. 4
+Fixed ranges and active interface host addresses: direct.
+.IP 3. 4
+Other DNS traffic: hijacked and resolved through DNS-over-HTTPS via the upstream.
+.IP 4. 4
+Other UDP traffic: rejected.
+.IP 5. 4
+Everything else: SOCKS5 upstream.
+.SH SEE ALSO
+.BR apt (8),
+.BR systemctl (1),
+.BR ip (8),
+.BR curl (1)

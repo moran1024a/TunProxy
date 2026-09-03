@@ -1,5 +1,6 @@
 #pragma once
 
+#include "tunproxy/constants.hpp"
 #include "tunproxy/result.hpp"
 #include "tunproxy/upstream.hpp"
 
@@ -14,6 +15,7 @@ struct SingBoxRuntimeConfig {
     ResolvedUpstream upstream;
     std::vector<std::string> bypass_cidrs;
     bool auto_redirect{true};
+    std::string interface_name{kTunInterfaceName};
 };
 
 Result<std::string> buildSingBoxConfig(const SingBoxRuntimeConfig& config);

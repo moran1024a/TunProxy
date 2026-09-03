@@ -2,6 +2,7 @@
 
 #include "tunproxy/config.hpp"
 #include "tunproxy/core_manager.hpp"
+#include "tunproxy/core_manifest.hpp"
 #include "tunproxy/log.hpp"
 #include "tunproxy/paths.hpp"
 #include "tunproxy/result.hpp"
@@ -18,6 +19,7 @@ struct ProxyStatus {
     bool running{false};
     std::string upstream;
     std::string core_version;
+    bool core_installed{false};
     pid_t pid{-1};
     std::string routing_mode;
     std::string upstream_address;
@@ -26,22 +28,34 @@ struct ProxyStatus {
 
 class ProxyManager {
 public:
-    explicit ProxyManager(AppPaths paths = {}, LogCallback logger = {});
+    explicit ProxyManager(
+        AppPaths paths = {},
+        LogCallback logger = {},
+        CoreReleaseManifest manifest = kSingBoxRelease);
 
     Result<ProxyStatus> start();
     Result<void> stop();
     Result<ProxyStatus> status() const;
 
 private:
+    enum class TunWait {
+        Ready,
+        CoreExited,
+        TimedOut,
+    };
+
     Result<pid_t> spawnCore(
         const std::filesystem::path& executable,
         const std::filesystem::path& config,
         const std::filesystem::path& log) const;
     Result<void> terminateCore(const RuntimeState& state) const;
-    Result<bool> waitForTun(pid_t pid, std::chrono::milliseconds timeout) const;
+    Result<TunWait> waitForTun(pid_t pid, std::chrono::milliseconds timeout) const;
+    [[nodiscard]] bool tunExists() const;
+    Result<void> awaitTunRemoval(ErrorCode code) const;
 
     AppPaths paths_;
     LogCallback logger_;
+    CoreReleaseManifest manifest_;
     ConfigManager config_;
     CoreManager core_;
     RuntimeStateStore state_;

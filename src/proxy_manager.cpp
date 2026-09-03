@@ -1,6 +1,7 @@
 #include "tunproxy/proxy_manager.hpp"
 
 #include "tunproxy/bypass_policy.hpp"
+#include "tunproxy/constants.hpp"
 #include "tunproxy/filesystem.hpp"
 #include "tunproxy/process.hpp"
 #include "tunproxy/singbox_config.hpp"
@@ -17,6 +18,7 @@
 #include <cerrno>
 #include <chrono>
 #include <csignal>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <thread>
@@ -58,20 +60,51 @@ Result<void> ensureTunDevice(const AppPaths& paths) {
     return Result<void>::success();
 }
 
-void waitForTunRemoval() {
-    for (int attempt = 0; attempt < 30 && ::if_nametoindex("tunproxy0") != 0; ++attempt) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
+ProxyStatus statusFromState(const RuntimeState& state) {
+    ProxyStatus status;
+    status.running = true;
+    status.upstream = state.upstream;
+    status.core_version = state.core_version;
+    status.core_installed = true;
+    status.pid = state.pid;
+    status.routing_mode = state.routing_mode;
+    status.upstream_address = state.upstream_address;
+    status.bypass_cidrs = state.bypass_cidrs;
+    return status;
+}
+
+const char* routingModeName(bool auto_redirect) {
+    return auto_redirect ? "auto-redirect" : "tun-route";
+}
+
+int pollIterations(std::chrono::milliseconds total) {
+    return static_cast<int>(total / kPollInterval);
 }
 
 } // namespace
 
-ProxyManager::ProxyManager(AppPaths paths, LogCallback logger)
+ProxyManager::ProxyManager(AppPaths paths, LogCallback logger, CoreReleaseManifest manifest)
     : paths_(std::move(paths)),
       logger_(std::move(logger)),
+      manifest_(manifest),
       config_(paths_),
-      core_(paths_, kSingBoxRelease, logger_),
+      core_(paths_, manifest_, logger_),
       state_(paths_) {}
+
+bool ProxyManager::tunExists() const {
+    return ::if_nametoindex(paths_.tun_interface.c_str()) != 0;
+}
+
+Result<void> ProxyManager::awaitTunRemoval(ErrorCode code) const {
+    for (int attempt = 0; attempt < pollIterations(kTunRemovalTimeout) && tunExists(); ++attempt) {
+        std::this_thread::sleep_for(kPollInterval);
+    }
+    if (tunExists()) {
+        return Result<void>::failure(makeError(
+            code, paths_.tun_interface + " did not disappear after sing-box stopped"));
+    }
+    return Result<void>::success();
+}
 
 Result<pid_t> ProxyManager::spawnCore(
     const std::filesystem::path& executable,
@@ -131,7 +164,9 @@ Result<pid_t> ProxyManager::spawnCore(
     (void)::close(exec_pipe[1]);
 
     struct pollfd handshake_descriptor{exec_pipe[0], POLLIN | POLLHUP, 0};
-    const int handshake_result = ::poll(&handshake_descriptor, 1, 5000);
+    const int handshake_result = ::poll(
+        &handshake_descriptor, 1,
+        static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(kCoreExecHandshakeTimeout).count()));
     if (handshake_result <= 0 || (handshake_descriptor.revents & (POLLERR | POLLNVAL)) != 0) {
         (void)::kill(child, SIGKILL);
         (void)::waitpid(child, nullptr, 0);
@@ -156,61 +191,54 @@ Result<pid_t> ProxyManager::spawnCore(
         "cannot execute sing-box: " + std::string(std::strerror(exec_error))));
 }
 
-Result<bool> ProxyManager::waitForTun(pid_t pid, std::chrono::milliseconds timeout) const {
+Result<ProxyManager::TunWait> ProxyManager::waitForTun(pid_t pid, std::chrono::milliseconds timeout) const {
     const auto started = std::chrono::steady_clock::now();
     const auto deadline = started + timeout;
-    int last_reported_second = -1;
+    const auto total_seconds = std::chrono::duration_cast<std::chrono::seconds>(timeout).count();
+    long long last_reported_second = -1;
     while (std::chrono::steady_clock::now() < deadline) {
         int status = 0;
         const pid_t waited = ::waitpid(pid, &status, WNOHANG);
         if (waited == pid) {
-            return Result<bool>::success(false);
+            return Result<TunWait>::success(TunWait::CoreExited);
         }
         if (waited < 0 && errno != EINTR && errno != ECHILD) {
-            return Result<bool>::failure(makeError(ErrorCode::StateError, "cannot inspect sing-box process"));
+            return Result<TunWait>::failure(makeError(ErrorCode::StateError, "cannot inspect sing-box process"));
         }
-        if (::if_nametoindex("tunproxy0") != 0) {
-            emitLog(logger_, LogLevel::Info, "TUN interface tunproxy0 is ready");
-            return Result<bool>::success(true);
+        if (tunExists()) {
+            return Result<TunWait>::success(TunWait::Ready);
         }
-        const int elapsed = static_cast<int>(std::chrono::duration_cast<std::chrono::seconds>(
-            std::chrono::steady_clock::now() - started).count());
-        if (elapsed != last_reported_second) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - started).count();
+        if (elapsed >= kTunReadyQuietPeriod.count() && elapsed != last_reported_second) {
             last_reported_second = elapsed;
             emitLog(logger_, LogLevel::Info,
-                "Waiting for TUN interface tunproxy0 (" + std::to_string(elapsed) + "/" +
-                std::to_string(std::chrono::duration_cast<std::chrono::seconds>(timeout).count()) +
-                " seconds)...");
+                "Waiting for TUN interface (" + std::to_string(elapsed) + "/" +
+                std::to_string(total_seconds) + "s)");
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::this_thread::sleep_for(kPollInterval);
     }
-    return Result<bool>::success(false);
+    return Result<TunWait>::success(TunWait::TimedOut);
 }
 
 Result<void> ProxyManager::terminateCore(const RuntimeState& state) const {
     if (state.pid <= 0) {
         return Result<void>::success();
     }
-
     const auto initially_managed = state_.isManagedProcessRunning(state);
     if (!initially_managed.ok()) {
         return Result<void>::failure(initially_managed.error());
     }
     if (!initially_managed.value()) {
-        emitLog(logger_, LogLevel::Warning,
-            "sing-box process " + std::to_string(state.pid) + " is no longer running");
         return Result<void>::success();
     }
-    emitLog(logger_, LogLevel::Info,
-        "Stopping sing-box (PID " + std::to_string(state.pid) + ")...");
     if (::kill(state.pid, SIGTERM) != 0 && errno != ESRCH) {
         return Result<void>::failure(makeError(ErrorCode::StateError, "cannot signal sing-box"));
     }
-    for (int attempt = 0; attempt < 50; ++attempt) {
+    for (int attempt = 0; attempt < pollIterations(kCoreTerminateTimeout); ++attempt) {
         int status = 0;
         const pid_t waited = ::waitpid(state.pid, &status, WNOHANG);
         if (waited == state.pid) {
-            emitLog(logger_, LogLevel::Info, "sing-box stopped gracefully");
             return Result<void>::success();
         }
         const auto managed = state_.isManagedProcessRunning(state);
@@ -220,25 +248,23 @@ Result<void> ProxyManager::terminateCore(const RuntimeState& state) const {
         if (!managed.value()) {
             return Result<void>::success();
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::this_thread::sleep_for(kPollInterval);
     }
     const auto before_kill = state_.isManagedProcessRunning(state);
     if (!before_kill.ok()) {
         return Result<void>::failure(before_kill.error());
     }
     if (!before_kill.value()) {
-        emitLog(logger_, LogLevel::Info, "sing-box stopped gracefully");
         return Result<void>::success();
     }
     emitLog(logger_, LogLevel::Warning, "sing-box did not stop; sending SIGKILL");
     if (::kill(state.pid, SIGKILL) != 0 && errno != ESRCH) {
         return Result<void>::failure(makeError(ErrorCode::StateError, "cannot force-stop sing-box"));
     }
-    for (int attempt = 0; attempt < 20; ++attempt) {
+    for (int attempt = 0; attempt < pollIterations(kCoreKillTimeout); ++attempt) {
         int status = 0;
         const pid_t waited = ::waitpid(state.pid, &status, WNOHANG);
         if (waited == state.pid) {
-            emitLog(logger_, LogLevel::Info, "sing-box force-stopped");
             return Result<void>::success();
         }
         const auto managed = state_.isManagedProcessRunning(state);
@@ -248,106 +274,87 @@ Result<void> ProxyManager::terminateCore(const RuntimeState& state) const {
         if (!managed.value()) {
             return Result<void>::success();
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::this_thread::sleep_for(kPollInterval);
     }
     return Result<void>::failure(makeError(ErrorCode::StateError, "sing-box did not stop"));
 }
 
 Result<ProxyStatus> ProxyManager::start() {
-    emitLog(logger_, LogLevel::Info, "Starting TunProxy...");
+    bool terminated_previous = false;
     const auto existing_state = state_.load();
     if (existing_state.ok()) {
         const auto running = state_.isManagedProcessRunning(existing_state.value());
         if (running.ok() && running.value() && existing_state.value().phase == "running") {
-            emitLog(logger_, LogLevel::Info,
-                "TunProxy is already running (PID " + std::to_string(existing_state.value().pid) + ")");
-            return Result<ProxyStatus>::success(ProxyStatus{
-                true,
-                existing_state.value().upstream,
-                existing_state.value().core_version,
-                existing_state.value().pid,
-                existing_state.value().routing_mode,
-                existing_state.value().upstream_address,
-                existing_state.value().bypass_cidrs,
-            });
+            return Result<ProxyStatus>::success(statusFromState(existing_state.value()));
         }
         if (running.ok() && running.value()) {
-            emitLog(logger_, LogLevel::Warning, "Found an incomplete previous start; cleaning it up");
+            emitLog(logger_, LogLevel::Warning, "cleaning up incomplete previous start");
             const auto stopped = terminateCore(existing_state.value());
             if (!stopped.ok()) {
                 return Result<ProxyStatus>::failure(stopped.error());
             }
-            waitForTunRemoval();
+            terminated_previous = true;
         }
     }
     const auto cleared_existing = state_.clear();
     if (!cleared_existing.ok()) {
         return Result<ProxyStatus>::failure(cleared_existing.error());
     }
+    if (terminated_previous) {
+        const auto previous_removed = awaitTunRemoval(ErrorCode::CoreStartFailure);
+        if (!previous_removed.ok()) {
+            return Result<ProxyStatus>::failure(previous_removed.error());
+        }
+    }
 
     const auto tun = ensureTunDevice(paths_);
     if (!tun.ok()) {
         return Result<ProxyStatus>::failure(tun.error());
     }
-    emitLog(logger_, LogLevel::Info, "TUN device is available: " + paths_.tun_device.string());
-
     const auto configured = config_.load();
     if (!configured.ok()) {
         return Result<ProxyStatus>::failure(configured.error());
     }
-    emitLog(logger_, LogLevel::Info,
-        "Checking SOCKS5 upstream " + formatUpstreamUri(configured.value()) + "...");
     const auto resolved = resolveAndProbeUpstream(configured.value());
     if (!resolved.ok()) {
         return Result<ProxyStatus>::failure(resolved.error());
     }
-    emitLog(logger_, LogLevel::Info,
-        "Upstream connection succeeded via " + resolved.value().address);
-    emitLog(logger_, LogLevel::Info, "Detecting active interface host addresses...");
-    const auto bypass = collectBypassPolicy(resolved.value().address);
+    const auto bypass = collectBypassPolicy(resolved.value().address, paths_.tun_interface);
     if (!bypass.ok()) {
         return Result<ProxyStatus>::failure(bypass.error());
     }
     const auto bypass_cidrs = bypass.value().allCidrs();
-    emitLog(logger_, LogLevel::Info,
-        "Bypass policy ready: " + std::to_string(bypass_cidrs.size()) +
-        " effective CIDRs, " + std::to_string(bypass.value().interface_cidrs.size()) +
-        " additional interface hosts, upstream pinned as " + bypass.value().upstream_cidr);
     const auto core = core_.ensureCore();
     if (!core.ok()) {
         return Result<ProxyStatus>::failure(core.error());
     }
-    emitLog(logger_, LogLevel::Info,
-        "Using verified sing-box " + core.value().version + " (" + core.value().revision + ")");
     const auto runtime_directory = ensureDirectory(paths_.runtime_dir, 0755);
     if (!runtime_directory.ok()) {
         return Result<ProxyStatus>::failure(runtime_directory.error());
     }
-    const auto config_path = paths_.runtime_dir / "sing-box.json";
-    const auto log_path = paths_.runtime_dir / "sing-box.log";
-
-    if (::if_nametoindex("tunproxy0") != 0) {
-        return Result<ProxyStatus>::failure(makeError(
-            ErrorCode::CoreStartFailure, "tunproxy0 already exists outside TunProxy"));
-    }
+    const auto config_path = paths_.core_config_file();
+    const auto log_path = paths_.core_log_file();
 
     Error last_error = makeError(ErrorCode::CoreStartFailure, "sing-box failed to establish TUN");
-    bool first_attempt = true;
+    bool routing_failure = false;
     for (const bool auto_redirect : {true, false}) {
-        if (::if_nametoindex("tunproxy0") != 0) {
+        if (tunExists()) {
             return Result<ProxyStatus>::failure(makeError(
-                ErrorCode::CoreStartFailure, "tunproxy0 already exists outside TunProxy"));
+                ErrorCode::CoreStartFailure, paths_.tun_interface + " already exists outside TunProxy"));
         }
-        if (!first_attempt) {
+        if (!auto_redirect) {
             emitLog(logger_, LogLevel::Warning,
-                "Retrying sing-box with compatibility TUN routing mode");
+                routing_failure
+                    ? "auto-redirect failed (" + last_error.message + "); retrying with tun-route"
+                    : "sing-box failed to start (" + last_error.message + "); retrying");
         }
-        first_attempt = false;
-        emitLog(logger_, LogLevel::Info,
-            std::string("Generating sing-box configuration (mode: ") +
-            (auto_redirect ? "auto-redirect" : "tun-route") + ")...");
-        const auto json = buildSingBoxConfig(
-            SingBoxRuntimeConfig{log_path, resolved.value(), bypass_cidrs, auto_redirect});
+        SingBoxRuntimeConfig runtime_config;
+        runtime_config.log_file = log_path;
+        runtime_config.upstream = resolved.value();
+        runtime_config.bypass_cidrs = bypass_cidrs;
+        runtime_config.auto_redirect = auto_redirect;
+        runtime_config.interface_name = paths_.tun_interface;
+        const auto json = buildSingBoxConfig(runtime_config);
         if (!json.ok()) {
             return Result<ProxyStatus>::failure(json.error());
         }
@@ -355,27 +362,24 @@ Result<ProxyStatus> ProxyManager::start() {
         if (!written.ok()) {
             return Result<ProxyStatus>::failure(written.error());
         }
-        emitLog(logger_, LogLevel::Info, "Validating sing-box configuration...");
         const auto checked = runCapture(
             {core.value().executable.string(), "check", "--disable-color", "-c", config_path.string()},
-            std::chrono::seconds(10));
+            kCoreCheckTimeout);
         if (!checked.ok() || checked.value().exit_code != 0) {
             const std::string detail = !checked.ok()
                 ? checked.error().message
                 : (!checked.value().stderr_text.empty()
                        ? checked.value().stderr_text
                        : "process exited with status " + std::to_string(checked.value().exit_code));
-            return Result<ProxyStatus>::failure(makeError(ErrorCode::InvalidConfiguration, "sing-box config check failed: " + detail));
+            return Result<ProxyStatus>::failure(makeError(
+                ErrorCode::InvalidConfiguration, "sing-box config check failed: " + detail));
         }
-        emitLog(logger_, LogLevel::Info, "sing-box configuration is valid");
         const auto spawned = spawnCore(core.value().executable, config_path, log_path);
         if (!spawned.ok()) {
-            emitLog(logger_, LogLevel::Warning, "sing-box failed to start: " + spawned.error().message);
             last_error = spawned.error();
+            routing_failure = false;
             continue;
         }
-        emitLog(logger_, LogLevel::Info,
-            "sing-box process started (PID " + std::to_string(spawned.value()) + ")");
         const auto start_ticks = state_.processStartTicks(spawned.value());
         if (!start_ticks.ok()) {
             // The child is still owned by this process, so it cannot be
@@ -394,7 +398,7 @@ Result<ProxyStatus> ProxyManager::start() {
         runtime_state.executable = core.value().executable;
         runtime_state.core_version = core.value().version;
         runtime_state.upstream = formatUpstreamUri(configured.value());
-        runtime_state.routing_mode = auto_redirect ? "auto-redirect" : "tun-route";
+        runtime_state.routing_mode = routingModeName(auto_redirect);
         runtime_state.upstream_address = resolved.value().address;
         runtime_state.bypass_cidrs = bypass_cidrs;
         runtime_state.phase = "starting";
@@ -404,68 +408,69 @@ Result<ProxyStatus> ProxyManager::start() {
             if (!stopped.ok()) {
                 return Result<ProxyStatus>::failure(stopped.error());
             }
-            waitForTunRemoval();
-            if (::if_nametoindex("tunproxy0") != 0) {
-                return Result<ProxyStatus>::failure(makeError(
-                    ErrorCode::CoreStartFailure, "tunproxy0 did not disappear after sing-box stopped"));
+            const auto removed = awaitTunRemoval(ErrorCode::CoreStartFailure);
+            if (!removed.ok()) {
+                return Result<ProxyStatus>::failure(removed.error());
             }
             return Result<ProxyStatus>::failure(provisional.error());
         }
-        const auto ready = waitForTun(spawned.value(), std::chrono::seconds(8));
-        if (!ready.ok() || !ready.value()) {
+        const auto ready = waitForTun(spawned.value(), kTunReadyTimeout);
+        if (!ready.ok()) {
             const auto stopped = terminateCore(runtime_state);
             if (!stopped.ok()) {
                 return Result<ProxyStatus>::failure(stopped.error());
             }
-            waitForTunRemoval();
-            const auto cleared = state_.clear();
-            if (!cleared.ok()) {
-                return Result<ProxyStatus>::failure(cleared.error());
+            (void)state_.clear();
+            (void)awaitTunRemoval(ErrorCode::CoreStartFailure);
+            return Result<ProxyStatus>::failure(ready.error());
+        }
+        if (ready.value() == TunWait::Ready) {
+            runtime_state.phase = "running";
+            const auto saved = state_.save(runtime_state);
+            if (!saved.ok()) {
+                const auto stopped = terminateCore(runtime_state);
+                if (!stopped.ok()) {
+                    return Result<ProxyStatus>::failure(stopped.error());
+                }
+                (void)state_.clear();
+                const auto removed = awaitTunRemoval(ErrorCode::CoreStartFailure);
+                if (!removed.ok()) {
+                    return Result<ProxyStatus>::failure(removed.error());
+                }
+                return Result<ProxyStatus>::failure(saved.error());
             }
-            if (::if_nametoindex("tunproxy0") != 0) {
-                return Result<ProxyStatus>::failure(makeError(
-                    ErrorCode::CoreStartFailure, "tunproxy0 did not disappear after sing-box stopped"));
+            return Result<ProxyStatus>::success(statusFromState(runtime_state));
+        }
+        if (ready.value() == TunWait::TimedOut) {
+            const auto stopped = terminateCore(runtime_state);
+            if (!stopped.ok()) {
+                return Result<ProxyStatus>::failure(stopped.error());
             }
+            last_error = makeError(ErrorCode::CoreStartFailure,
+                "sing-box did not establish TUN within " +
+                std::to_string(std::chrono::duration_cast<std::chrono::seconds>(kTunReadyTimeout).count()) +
+                " seconds");
+        } else {
+            // The child exited and has already been reaped by waitForTun.
             last_error = makeError(ErrorCode::CoreStartFailure, "sing-box exited before TUN became ready");
-            emitLog(logger_, LogLevel::Warning, last_error.message);
-            continue;
         }
-        runtime_state.phase = "running";
-        const auto saved = state_.save(runtime_state);
-        if (!saved.ok()) {
-            const auto stopped = terminateCore(runtime_state);
-            if (!stopped.ok()) {
-                return Result<ProxyStatus>::failure(stopped.error());
-            }
-            waitForTunRemoval();
-            if (::if_nametoindex("tunproxy0") != 0) {
-                return Result<ProxyStatus>::failure(makeError(
-                    ErrorCode::CoreStartFailure, "tunproxy0 did not disappear after sing-box stopped"));
-            }
-            return Result<ProxyStatus>::failure(saved.error());
+        routing_failure = true;
+        const auto cleared = state_.clear();
+        if (!cleared.ok()) {
+            return Result<ProxyStatus>::failure(cleared.error());
         }
-        return Result<ProxyStatus>::success(ProxyStatus{
-            true,
-            runtime_state.upstream,
-            runtime_state.core_version,
-            runtime_state.pid,
-            runtime_state.routing_mode,
-            runtime_state.upstream_address,
-            runtime_state.bypass_cidrs,
-        });
+        const auto removed = awaitTunRemoval(ErrorCode::CoreStartFailure);
+        if (!removed.ok()) {
+            return Result<ProxyStatus>::failure(removed.error());
+        }
     }
     return Result<ProxyStatus>::failure(std::move(last_error));
 }
 
 Result<void> ProxyManager::stop() {
-    emitLog(logger_, LogLevel::Info, "Stopping TunProxy...");
     const auto runtime_state = state_.load();
     if (!runtime_state.ok()) {
-        const auto cleared = state_.clear();
-        if (cleared.ok()) {
-            emitLog(logger_, LogLevel::Info, "TunProxy is already stopped");
-        }
-        return cleared;
+        return state_.clear();
     }
     const auto running = state_.isManagedProcessRunning(runtime_state.value());
     if (running.ok() && running.value()) {
@@ -473,22 +478,19 @@ Result<void> ProxyManager::stop() {
         if (!stopped.ok()) {
             return stopped;
         }
-        waitForTunRemoval();
-        if (::if_nametoindex("tunproxy0") != 0) {
-            return Result<void>::failure(makeError(
-                ErrorCode::StateError, "tunproxy0 did not disappear after sing-box stopped"));
+        const auto removed = awaitTunRemoval(ErrorCode::StateError);
+        if (!removed.ok()) {
+            return removed;
         }
-        emitLog(logger_, LogLevel::Info, "TUN interface tunproxy0 removed");
     } else {
-        emitLog(logger_, LogLevel::Info, "No managed sing-box process is running; clearing state");
+        emitLog(logger_, LogLevel::Warning, "no managed sing-box process; clearing stale state");
     }
     const auto cleared = state_.clear();
     if (!cleared.ok()) {
         return cleared;
     }
     std::error_code ignored;
-    std::filesystem::remove(paths_.runtime_dir / "sing-box.json", ignored);
-    emitLog(logger_, LogLevel::Info, "TunProxy stopped");
+    std::filesystem::remove(paths_.core_config_file(), ignored);
     return Result<void>::success();
 }
 
@@ -498,6 +500,10 @@ Result<ProxyStatus> ProxyManager::status() const {
     if (configured.ok()) {
         status.upstream = formatUpstreamUri(configured.value());
     }
+    status.core_version = std::string(manifest_.version);
+    std::error_code ignored;
+    status.core_installed =
+        std::filesystem::symlink_status(core_.corePath(), ignored).type() == std::filesystem::file_type::regular;
     const auto runtime_state = state_.load();
     if (!runtime_state.ok()) {
         return Result<ProxyStatus>::success(std::move(status));
@@ -506,13 +512,7 @@ Result<ProxyStatus> ProxyManager::status() const {
     if (!running.ok() || !running.value() || runtime_state.value().phase != "running") {
         return Result<ProxyStatus>::success(std::move(status));
     }
-    status.running = true;
-    status.upstream = runtime_state.value().upstream;
-    status.core_version = runtime_state.value().core_version;
-    status.pid = runtime_state.value().pid;
-    status.routing_mode = runtime_state.value().routing_mode;
-    status.upstream_address = runtime_state.value().upstream_address;
-    status.bypass_cidrs = runtime_state.value().bypass_cidrs;
+    status = statusFromState(runtime_state.value());
     return Result<ProxyStatus>::success(std::move(status));
 }
 
